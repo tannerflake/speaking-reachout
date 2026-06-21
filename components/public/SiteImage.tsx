@@ -13,6 +13,7 @@ export function SiteImage({
   imageKey,
   aspect = "aspect-[4/3]",
   className = "",
+  imgClassName = "",
   sizes = "100vw",
   priority = false,
 }: {
@@ -20,6 +21,8 @@ export function SiteImage({
   imageKey: string;
   aspect?: string;
   className?: string;
+  /** Extra classes for the <img> itself (e.g. responsive object-position). */
+  imgClassName?: string;
   sizes?: string;
   priority?: boolean;
 }) {
@@ -38,7 +41,7 @@ export function SiteImage({
           fill
           sizes={sizes}
           priority={priority}
-          className="object-cover"
+          className={`object-cover ${imgClassName}`}
         />
       ) : (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-navy-800 p-4 text-center">

@@ -24,17 +24,22 @@ export function SignatureLogo({
         src={url}
         alt={image?.alt_text ?? "Jeff Flake"}
         height={height}
-        width={height * 4}
-        className={`h-auto w-auto ${className}`}
-        style={{ height }}
+        // Generous width hint; the browser scales to the asset's true aspect
+        // ratio (fixed height, auto width), so the signature is never distorted.
+        width={height * 6}
+        className={`w-auto ${className}`}
+        style={{ height, width: "auto" }}
         priority
       />
     );
   }
 
+  // Fallback wordmark scales with the same height so swapping in a real
+  // signature keeps the header/footer proportions consistent.
   return (
     <span
-      className={`font-display text-2xl italic leading-none text-white ${className}`}
+      className={`font-display italic leading-none text-white ${className}`}
+      style={{ fontSize: Math.round(height * 0.95) }}
     >
       Jeff Flake
     </span>

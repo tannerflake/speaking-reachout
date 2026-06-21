@@ -32,7 +32,7 @@ export function PublicHeader({ signature }: { signature: SiteImageRow | undefine
     >
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
         <Link href="/" aria-label="Jeff Flake home" className="shrink-0">
-          <SignatureLogo image={signature} height={30} />
+          <SignatureLogo image={signature} height={52} />
         </Link>
         <nav className="flex items-center gap-1 sm:gap-2">
           {NAV.map((l) => (

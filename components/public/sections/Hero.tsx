@@ -21,6 +21,10 @@ export function Hero({
           image={images[imageKey]}
           imageKey={imageKey}
           aspect="h-full w-full"
+          // Mobile keeps the default centered cover (frames perfectly). On wider
+          // desktop viewports a tall portrait would crop to its middle, so pull
+          // the focal point toward the top to keep the face in frame.
+          imgClassName="sm:object-top"
           priority
           sizes="100vw"
         />
