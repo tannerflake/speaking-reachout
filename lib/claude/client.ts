@@ -79,6 +79,12 @@ export async function generateWithWebSearch(opts: {
   userPrompt: string;
   maxTokens?: number;
   maxSearches?: number;
+  /**
+   * Hard deadline for the whole call (including pause_turn resumes). If the
+   * stream stalls, this aborts it so the caller sees an error instead of
+   * hanging forever. Defaults to 4 minutes.
+   */
+  timeoutMs?: number;
 }): Promise<string> {
   const client = getAnthropic();
   const messages: Anthropic.MessageParam[] = [
@@ -93,17 +99,24 @@ export async function generateWithWebSearch(opts: {
     },
   ];
 
+  // Single deadline shared across pause_turn resumes — a stuck call can never
+  // exceed this, so Discover always terminates rather than loading forever.
+  const signal = AbortSignal.timeout(opts.timeoutMs ?? 240_000);
+
   let continuations = 0;
   // Loop only to resume on pause_turn.
   for (;;) {
-    const stream = client.messages.stream({
-      model: CLAUDE_MODEL,
-      max_tokens: opts.maxTokens ?? 16000,
-      thinking: { type: "adaptive" },
-      system: opts.system,
-      tools,
-      messages,
-    });
+    const stream = client.messages.stream(
+      {
+        model: CLAUDE_MODEL,
+        max_tokens: opts.maxTokens ?? 16000,
+        thinking: { type: "adaptive" },
+        system: opts.system,
+        tools,
+        messages,
+      },
+      { signal },
+    );
     const message = await stream.finalMessage();
 
     if (message.stop_reason === "pause_turn" && continuations < 5) {
