@@ -125,8 +125,8 @@ export async function runVoiceAnalysis(): Promise<VoiceRunSummary> {
         });
     }
 
-    revalidatePath("/voice-insights");
-    revalidatePath("/settings/tailoring");
+    revalidatePath("/admin/voice-insights");
+    revalidatePath("/admin/settings/tailoring");
     return {
       version: nextVersion,
       sourceMessageCount,
@@ -189,8 +189,8 @@ export async function acceptSuggestedRule(
     .update({ suggested_rules: updated })
     .eq("id", profileId);
 
-  revalidatePath("/voice-insights");
-  revalidatePath("/settings/tailoring");
+  revalidatePath("/admin/voice-insights");
+  revalidatePath("/admin/settings/tailoring");
   return {};
 }
 
@@ -220,7 +220,7 @@ export async function acceptAllSuggestedRules(
     .update({ suggested_rules: updated })
     .eq("id", profileId);
 
-  revalidatePath("/voice-insights");
-  revalidatePath("/settings/tailoring");
+  revalidatePath("/admin/voice-insights");
+  revalidatePath("/admin/settings/tailoring");
   return { accepted: pending.length };
 }

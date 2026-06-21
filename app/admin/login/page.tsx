@@ -19,7 +19,7 @@ export default async function LoginPage({
           </p>
         </div>
         <div className="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm">
-          <LoginForm next={next ?? "/"} />
+          <LoginForm next={next ?? "/admin"} />
         </div>
       </div>
     </main>

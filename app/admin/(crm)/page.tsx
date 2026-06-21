@@ -1,11 +1,17 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getPipelineCounts, getRecentInteractions } from "@/lib/data";
+import { getCurrentUser } from "@/lib/auth/profile";
 import { PIPELINE_STATUSES } from "@/lib/types";
 import { statusClasses, statusLabel, formatDateTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
+  // Route editors (Jeff) straight to the site editor; CRM admins see the CRM.
+  const me = await getCurrentUser();
+  if (me?.role === "editor") redirect("/admin/site-editor");
+
   const [counts, activity] = await Promise.all([
     getPipelineCounts(),
     getRecentInteractions(15),
@@ -24,7 +30,7 @@ export default async function DashboardPage() {
           {PIPELINE_STATUSES.map((s) => (
             <Link
               key={s}
-              href={`/leads?status=${s}`}
+              href={`/admin/leads?status=${s}`}
               className="rounded-lg border border-zinc-200 bg-white p-4 transition-colors hover:border-zinc-300"
             >
               <div className="text-2xl font-semibold text-zinc-900">
@@ -50,19 +56,19 @@ export default async function DashboardPage() {
         <h2 className="mb-2 text-sm font-medium text-zinc-500">Quick actions</h2>
         <div className="flex flex-wrap gap-2">
           <Link
-            href="/discover"
+            href="/admin/discover"
             className="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
           >
             Discover leads
           </Link>
           <Link
-            href="/leads"
+            href="/admin/leads"
             className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
           >
             View leads
           </Link>
           <Link
-            href="/settings/tailoring"
+            href="/admin/settings/tailoring"
             className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
           >
             Tailoring settings
@@ -91,7 +97,7 @@ export default async function DashboardPage() {
                     <span className="text-zinc-800">{a.detail}</span>{" "}
                     {a.lead && a.lead_id && (
                       <Link
-                        href={`/leads/${a.lead_id}`}
+                        href={`/admin/leads/${a.lead_id}`}
                         className="text-blue-600 hover:underline"
                       >
                         {a.lead.name}

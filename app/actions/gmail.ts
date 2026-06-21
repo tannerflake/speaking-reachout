@@ -5,6 +5,6 @@ import { clearGmailConnection } from "@/lib/gmail/connection";
 
 export async function disconnectGmail(): Promise<void> {
   await clearGmailConnection();
-  revalidatePath("/settings/tailoring");
-  revalidatePath("/");
+  revalidatePath("/admin/settings/tailoring");
+  revalidatePath("/admin/admin");
 }

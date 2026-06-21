@@ -173,7 +173,7 @@ export function LeadsView({
               <tr>
                 <td colSpan={7} className="text-center text-zinc-500">
                   No leads match. Run{" "}
-                  <Link href="/discover" className="text-blue-600 hover:underline">
+                  <Link href="/admin/discover" className="text-blue-600 hover:underline">
                     Discover
                   </Link>{" "}
                   to add some.
@@ -192,7 +192,7 @@ export function LeadsView({
                   </td>
                   <td>
                     <Link
-                      href={`/leads/${r.id}`}
+                      href={`/admin/leads/${r.id}`}
                       className="font-medium text-blue-600 hover:underline"
                     >
                       {r.name}

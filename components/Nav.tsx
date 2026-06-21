@@ -3,22 +3,31 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import type { UserRole } from "@/lib/auth/profile";
 
-const LINKS = [
-  { href: "/", label: "Dashboard" },
-  { href: "/leads", label: "Leads" },
-  { href: "/discover", label: "Discover" },
-  { href: "/voice-insights", label: "Voice & Insights" },
-  { href: "/settings/tailoring", label: "Tailoring" },
+const CRM_LINKS = [
+  { href: "/admin", label: "Dashboard", exact: true },
+  { href: "/admin/leads", label: "Leads" },
+  { href: "/admin/discover", label: "Discover" },
+  { href: "/admin/voice-insights", label: "Voice & Insights" },
+  { href: "/admin/settings/tailoring", label: "Tailoring" },
+  { href: "/admin/site-editor", label: "Site editor" },
 ];
 
-export function Nav() {
+// Editors (Jeff) only need the site editor.
+const EDITOR_LINKS = [
+  { href: "/admin/site-editor", label: "Site editor", exact: true },
+];
+
+export function Nav({ role = "crm_admin" }: { role?: UserRole }) {
   const pathname = usePathname();
+  const links = role === "editor" ? EDITOR_LINKS : CRM_LINKS;
   return (
     <nav className="flex items-center gap-1">
-      {LINKS.map((l) => {
-        const active =
-          l.href === "/" ? pathname === "/" : pathname.startsWith(l.href);
+      {links.map((l) => {
+        const active = l.exact
+          ? pathname === l.href
+          : pathname === l.href || pathname.startsWith(`${l.href}/`);
         return (
           <Link
             key={l.href}

@@ -7,6 +7,21 @@
   --color-line: #e4e4e7;
   --color-brand: #1d4ed8;
   --color-brand-fg: #ffffff;
+
+  /* Public marketing site palette: deep navy + white + signature blue. */
+  --color-navy-950: #0a1024;
+  --color-navy-900: #0f1830;
+  --color-navy-800: #16213f;
+  --color-navy-700: #1f2d52;
+  --color-accent: #3b6fe0;
+  --color-accent-bright: #5b8def;
+  /* Warmth reserved for the island chapter. */
+  --color-warm: #c9803f;
+  --color-warm-deep: #7a3f1c;
+
+  /* Fonts (wired via next/font CSS variables in the public layout). */
+  --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
+  --font-body: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
 }
 
 :root {
@@ -48,4 +63,49 @@ body {
 }
 .table-base tbody tr:hover {
   background: #fafafa;
+}
+
+/* ===========================================================================
+   Public marketing site
+   =========================================================================== */
+
+/* Scope navy theming to the public site so the CRM keeps its light theme. */
+.public-site {
+  background: var(--color-navy-950);
+  color: #f4f6fb;
+  font-family: var(--font-body);
+}
+
+.public-site .font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+/* Smooth anchor scrolling for nav links, disabled under reduced-motion. */
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  /* Neutralize any transform/opacity entrance animations. */
+  .public-site [data-reveal] {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* CSS-only reveal used where JS/motion is not desired. */
+.public-site [data-reveal] {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity 0.7s ease,
+    transform 0.7s ease;
+}
+.public-site [data-reveal].is-visible {
+  opacity: 1;
+  transform: none;
 }

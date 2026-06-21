@@ -170,7 +170,7 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
               >
                 <div className="min-w-0">
                   <Link
-                    href={`/leads/${l.id}`}
+                    href={`/admin/leads/${l.id}`}
                     className="font-medium text-blue-600 hover:underline"
                   >
                     {l.name}
@@ -199,7 +199,7 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
         {activeRules.length === 0 ? (
           <p className="mt-1 text-sm text-zinc-400">
             No active tailoring rules.{" "}
-            <Link href="/settings/tailoring" className="text-blue-600 hover:underline">
+            <Link href="/admin/settings/tailoring" className="text-blue-600 hover:underline">
               Add one
             </Link>
             .
@@ -236,7 +236,7 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
                 ` ${summary.failedBatches} batch(es) failed and were skipped.`}
             </p>
             <Link
-              href="/leads?status=new"
+              href="/admin/leads?status=new"
               className="mt-2 inline-block text-blue-600 hover:underline"
             >
               View new leads →

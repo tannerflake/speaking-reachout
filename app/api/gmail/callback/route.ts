@@ -1,10 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { google } from "googleapis";
-import { createOAuthClient } from "@/lib/gmail/oauth";
+import { createOAuthClient, gmailCallbackUrl, publicOrigin } from "@/lib/gmail/oauth";
 import { saveGmailTokens } from "@/lib/gmail/connection";
 
 export async function GET(request: NextRequest) {
-  const settingsUrl = new URL("/settings/tailoring", request.nextUrl.origin);
+  // Use the request's real origin (not a hardcoded env value) so the flow
+  // returns to the same domain it started on — and so the redirect URI here
+  // matches the one used to start consent, as Google requires.
+  const redirectUri = gmailCallbackUrl(request);
+  const settingsUrl = new URL("/admin/settings/tailoring", publicOrigin(request));
   const code = request.nextUrl.searchParams.get("code");
   const oauthError = request.nextUrl.searchParams.get("error");
 
@@ -14,7 +18,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const oauth = createOAuthClient();
+    const oauth = createOAuthClient(redirectUri);
     const { tokens } = await oauth.getToken(code);
     oauth.setCredentials(tokens);
 

@@ -52,7 +52,7 @@ export async function generateDraft(
       .select("id")
       .single();
     if (error) return { error: error.message };
-    revalidatePath(`/leads/${leadId}`);
+    revalidatePath(`/admin/leads/${leadId}`);
     return { id: (data as { id: string }).id, styleAdjusted: gen.styleAdjusted };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to draft outreach." };
@@ -81,7 +81,7 @@ export async function updateDraft(
     .eq("id", outreachId);
   if (error) return { error: error.message };
 
-  revalidatePath(`/leads/${(existing as { lead_id: string }).lead_id}`);
+  revalidatePath(`/admin/leads/${(existing as { lead_id: string }).lead_id}`);
   return {};
 }
 
@@ -129,7 +129,7 @@ export async function regenerateDraft(
       })
       .eq("id", outreachId);
     if (error) return { error: error.message };
-    revalidatePath(`/leads/${row.lead_id}`);
+    revalidatePath(`/admin/leads/${row.lead_id}`);
     return { id: outreachId, styleAdjusted: gen.styleAdjusted };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to regenerate." };
@@ -190,9 +190,9 @@ export async function approveAndSend(
       detail: `Sent "${row.subject}" to ${email}.`,
     });
 
-    revalidatePath(`/leads/${row.lead_id}`);
-    revalidatePath("/leads");
-    revalidatePath("/");
+    revalidatePath(`/admin/leads/${row.lead_id}`);
+    revalidatePath("/admin/leads");
+    revalidatePath("/admin/admin");
     return { ok: true };
   } catch (e) {
     const message =
@@ -205,7 +205,7 @@ export async function approveAndSend(
       .from("outreach")
       .update({ status: "failed", error: message })
       .eq("id", outreachId);
-    revalidatePath(`/leads/${row.lead_id}`);
+    revalidatePath(`/admin/leads/${row.lead_id}`);
     return { error: message };
   }
 }
@@ -227,6 +227,6 @@ export async function bulkDraft(
     }
   }
   await Promise.all([worker(), worker()]);
-  revalidatePath("/leads");
+  revalidatePath("/admin/leads");
   return { created, failed };
 }

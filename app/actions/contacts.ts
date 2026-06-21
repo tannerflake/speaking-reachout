@@ -72,7 +72,7 @@ export async function resolveContactEmail(
     kind: "note",
     detail: `Resolved contact email via ${resolver.name}.`,
   });
-  revalidatePath(`/leads/${contact.lead_id}`);
+  revalidatePath(`/admin/leads/${contact.lead_id}`);
   return { email: result.email, provider: resolver.name };
 }
 
@@ -106,6 +106,6 @@ export async function setContactEmail(
     kind: "note",
     detail: "Contact email set manually.",
   });
-  revalidatePath(`/leads/${leadId}`);
+  revalidatePath(`/admin/leads/${leadId}`);
   return {};
 }

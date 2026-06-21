@@ -42,7 +42,7 @@ export default async function LeadDetailPage({
       {/* Header */}
       <div>
         <Link
-          href="/leads"
+          href="/admin/leads"
           className="text-sm text-blue-600 hover:underline"
         >
           ← All leads

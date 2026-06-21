@@ -29,7 +29,7 @@ export async function addRule(
     return { error: e instanceof Error ? e.message : "Failed to add rule." };
   }
 
-  revalidatePath("/settings/tailoring");
+  revalidatePath("/admin/settings/tailoring");
   return { ok: true };
 }
 
@@ -39,11 +39,11 @@ export async function toggleRule(id: string, isActive: boolean): Promise<void> {
     .from("tailoring_rules")
     .update({ is_active: isActive })
     .eq("id", id);
-  revalidatePath("/settings/tailoring");
+  revalidatePath("/admin/settings/tailoring");
 }
 
 export async function deleteRule(id: string): Promise<void> {
   const supabase = await createClient();
   await supabase.from("tailoring_rules").delete().eq("id", id);
-  revalidatePath("/settings/tailoring");
+  revalidatePath("/admin/settings/tailoring");
 }

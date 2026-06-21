@@ -28,16 +28,16 @@ export async function updateLeadStatus(
   if (error) throw new Error(error.message);
 
   await logInteraction(leadId, "status_change", `Status set to ${statusLabel(status)}.`);
-  revalidatePath(`/leads/${leadId}`);
-  revalidatePath("/leads");
-  revalidatePath("/");
+  revalidatePath(`/admin/leads/${leadId}`);
+  revalidatePath("/admin/leads");
+  revalidatePath("/admin/admin");
 }
 
 export async function addNote(leadId: string, note: string): Promise<void> {
   const trimmed = note.trim();
   if (!trimmed) return;
   await logInteraction(leadId, "note", trimmed);
-  revalidatePath(`/leads/${leadId}`);
+  revalidatePath(`/admin/leads/${leadId}`);
 }
 
 export interface BookingInput {
@@ -75,9 +75,9 @@ export async function saveBooking(
     `Booked: ${input.event_name.trim()}${input.event_date ? ` (${input.event_date})` : ""}.`,
   );
 
-  revalidatePath(`/leads/${leadId}`);
-  revalidatePath("/leads");
-  revalidatePath("/");
+  revalidatePath(`/admin/leads/${leadId}`);
+  revalidatePath("/admin/leads");
+  revalidatePath("/admin/admin");
   return {};
 }
 
@@ -126,7 +126,7 @@ export async function reachOutAgain(
       "note",
       "Started a new outreach cycle (recurring venue).",
     );
-    revalidatePath(`/leads/${leadId}`);
+    revalidatePath(`/admin/leads/${leadId}`);
     return { outreachId: (data as { id: string }).id };
   } catch (e) {
     return {

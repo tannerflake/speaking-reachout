@@ -2,12 +2,23 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { getEnv } from "@/lib/env";
 
-const PUBLIC_PATHS = ["/login", "/auth"];
+// The public marketing site is open to everyone. Only the admin area and the
+// CRM's server-side API routes require a session.
+const PROTECTED_PREFIXES = ["/admin", "/api/gmail", "/api/discover"];
+// The login screen lives under /admin but must stay reachable while signed out.
+const ADMIN_PUBLIC_PATHS = ["/admin/login"];
+
+function isProtected(path: string): boolean {
+  if (ADMIN_PUBLIC_PATHS.includes(path)) return false;
+  return PROTECTED_PREFIXES.some(
+    (p) => path === p || path.startsWith(`${p}/`),
+  );
+}
 
 /**
- * Refreshes the Supabase auth session on every request and gates the app
- * behind login. Unauthenticated requests to any non-public path are
- * redirected to /login.
+ * Refreshes the Supabase auth session on every request. The public site is
+ * unauthenticated; requests to a protected path (the admin area / CRM APIs)
+ * without a session are redirected to /admin/login.
  */
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
@@ -43,20 +54,17 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  const isPublic = PUBLIC_PATHS.some(
-    (p) => path === p || path.startsWith(`${p}/`),
-  );
 
-  if (!user && !isPublic) {
+  if (!user && isProtected(path)) {
     const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = "/login";
+    redirectUrl.pathname = "/admin/login";
     redirectUrl.searchParams.set("next", path);
     return NextResponse.redirect(redirectUrl);
   }
 
-  if (user && path === "/login") {
+  if (user && path === "/admin/login") {
     const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = "/";
+    redirectUrl.pathname = "/admin";
     redirectUrl.search = "";
     return NextResponse.redirect(redirectUrl);
   }

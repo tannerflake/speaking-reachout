@@ -13,7 +13,7 @@ export async function signIn(
 ): Promise<AuthState> {
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
-  const next = String(formData.get("next") ?? "/") || "/";
+  const next = String(formData.get("next") ?? "/admin") || "/admin";
 
   if (!email || !password) {
     return { error: "Email and password are required." };
@@ -25,11 +25,11 @@ export async function signIn(
     return { error: error.message };
   }
 
-  redirect(next.startsWith("/") ? next : "/");
+  redirect(next.startsWith("/") ? next : "/admin");
 }
 
 export async function signOut(): Promise<void> {
   const supabase = await createClient();
   await supabase.auth.signOut();
-  redirect("/login");
+  redirect("/admin/login");
 }
