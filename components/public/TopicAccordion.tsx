@@ -10,7 +10,7 @@ export function TopicAccordion({ topics }: { topics: TopicData[] }) {
   const reduced = useReducedMotion();
 
   return (
-    <div className="divide-y divide-white/10 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02]">
+    <div className="divide-y divide-rule border border-rule bg-panel">
       {topics.map((topic, i) => {
         const isOpen = open === i;
         return (
@@ -19,16 +19,16 @@ export function TopicAccordion({ topics }: { topics: TopicData[] }) {
               type="button"
               onClick={() => setOpen(isOpen ? null : i)}
               aria-expanded={isOpen}
-              className="flex w-full items-center justify-between gap-4 px-5 py-5 text-left transition-colors hover:bg-white/[0.03] sm:px-7"
+              className="flex w-full items-center justify-between gap-4 px-5 py-5 text-left transition-colors hover:bg-paper-2 sm:px-7"
             >
-              <span className="font-display text-xl font-medium text-white sm:text-2xl">
+              <span className="font-display text-xl font-medium text-oxford sm:text-2xl">
                 {topic.title}
               </span>
               <motion.span
                 aria-hidden
                 animate={{ rotate: isOpen ? 45 : 0 }}
                 transition={{ duration: reduced ? 0 : 0.25 }}
-                className="shrink-0 text-2xl font-light leading-none text-accent-bright"
+                className="shrink-0 text-2xl font-light leading-none text-brass"
               >
                 +
               </motion.span>
@@ -42,7 +42,7 @@ export function TopicAccordion({ topics }: { topics: TopicData[] }) {
                   transition={{ duration: reduced ? 0 : 0.3, ease: "easeInOut" }}
                   className="overflow-hidden"
                 >
-                  <p className="px-5 pb-6 text-base leading-relaxed text-white/70 sm:px-7">
+                  <p className="px-5 pb-6 text-base leading-relaxed text-graphite/80 sm:px-7">
                     {topic.body}
                   </p>
                 </motion.div>

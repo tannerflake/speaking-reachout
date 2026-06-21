@@ -16,14 +16,14 @@ export function FeaturedVideo({
   const poster = images[posterKey];
 
   return (
-    <section className="bg-navy-950 py-20 sm:py-28">
+    <section className="bg-paper py-20 sm:py-28">
       <div className="mx-auto max-w-4xl px-5 sm:px-8">
         <Reveal>
-          <h2 className="font-display text-3xl font-semibold text-white sm:text-4xl">
+          <h2 className="font-display text-3xl font-medium text-oxford sm:text-4xl">
             {data.title ?? "Watch Jeff in Action"}
           </h2>
           {data.caption && (
-            <p className="mt-4 max-w-2xl text-lg leading-relaxed text-white/70">
+            <p className="mt-4 max-w-2xl text-lg leading-relaxed text-graphite/80">
               {data.caption}
             </p>
           )}
@@ -43,7 +43,7 @@ export function FeaturedVideo({
               href={data.event_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-4 inline-block text-sm text-accent-bright underline-offset-4 hover:underline"
+              className="mt-4 inline-block text-sm font-medium text-brass underline-offset-4 hover:underline"
             >
               View the event details
             </a>

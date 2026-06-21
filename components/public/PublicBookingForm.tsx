@@ -14,8 +14,8 @@ const EVENT_TYPES = [
 ];
 
 const field =
-  "mt-1 w-full rounded-lg border border-white/15 bg-white/[0.04] px-4 py-3 text-sm text-white placeholder-white/35 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent";
-const label = "block text-sm font-medium text-white/80";
+  "mt-1 w-full border border-rule bg-panel px-4 py-3 text-sm text-graphite placeholder-slate/60 focus:border-oxford focus:outline-none focus:ring-1 focus:ring-oxford";
+const label = "block text-sm font-medium text-graphite";
 
 export function PublicBookingForm({ fallbackEmail }: { fallbackEmail: string }) {
   const [done, setDone] = useState(false);
@@ -48,11 +48,11 @@ export function PublicBookingForm({ fallbackEmail }: { fallbackEmail: string }) 
 
   if (done) {
     return (
-      <div className="rounded-2xl border border-accent/30 bg-accent/[0.07] p-8 text-center">
-        <h3 className="font-display text-2xl font-semibold text-white">
+      <div className="border border-brass/40 bg-brass/[0.07] p-8 text-center">
+        <h3 className="font-display text-2xl font-medium text-oxford">
           Thanks. We&rsquo;ll be in touch shortly.
         </h3>
-        <p className="mt-2 text-white/70">
+        <p className="mt-2 text-graphite/75">
           Your inquiry is on its way to the team.
         </p>
       </div>
@@ -72,13 +72,13 @@ export function PublicBookingForm({ fallbackEmail }: { fallbackEmail: string }) 
       <div className="grid gap-5 sm:grid-cols-2">
         <div>
           <label className={label} htmlFor="bf-name">
-            Name <span className="text-accent-bright">*</span>
+            Name <span className="text-brass">*</span>
           </label>
           <input id="bf-name" name="name" required className={field} />
         </div>
         <div>
           <label className={label} htmlFor="bf-email">
-            Email <span className="text-accent-bright">*</span>
+            Email <span className="text-brass">*</span>
           </label>
           <input
             id="bf-email"
@@ -92,7 +92,7 @@ export function PublicBookingForm({ fallbackEmail }: { fallbackEmail: string }) 
 
       <div>
         <label className={label} htmlFor="bf-org">
-          Organization / Institution <span className="text-accent-bright">*</span>
+          Organization / Institution <span className="text-brass">*</span>
         </label>
         <input id="bf-org" name="organization" required className={field} />
       </div>
@@ -109,7 +109,7 @@ export function PublicBookingForm({ fallbackEmail }: { fallbackEmail: string }) 
             className={field}
           >
             {EVENT_TYPES.map((t) => (
-              <option key={t} value={t} className="bg-navy-900">
+              <option key={t} value={t} className="bg-panel text-graphite">
                 {t}
               </option>
             ))}
@@ -135,21 +135,21 @@ export function PublicBookingForm({ fallbackEmail }: { fallbackEmail: string }) 
         <textarea id="bf-msg" name="message" rows={4} className={field} />
       </div>
 
-      {error && <p className="text-sm text-rose-300">{error}</p>}
+      {error && <p className="text-sm text-rose-700">{error}</p>}
 
       <div className="flex flex-wrap items-center gap-4">
         <button
           type="submit"
           disabled={pending}
-          className="rounded-full bg-accent px-7 py-3.5 text-base font-semibold text-white transition-colors hover:bg-accent-bright disabled:opacity-60"
+          className="rounded-md bg-oxford px-7 py-3.5 text-base font-semibold tracking-wide text-white transition-colors hover:bg-oxford-soft disabled:opacity-60"
         >
           {pending ? "Sending…" : "Send inquiry"}
         </button>
-        <span className="text-sm text-white/55">
+        <span className="text-sm text-slate">
           Or email{" "}
           <a
             href={`mailto:${fallbackEmail}`}
-            className="text-accent-bright underline-offset-4 hover:underline"
+            className="text-brass underline-offset-4 hover:underline"
           >
             {fallbackEmail}
           </a>

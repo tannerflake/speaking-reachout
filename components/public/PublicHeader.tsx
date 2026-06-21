@@ -24,29 +24,27 @@ export function PublicHeader({ signature }: { signature: SiteImageRow | undefine
 
   return (
     <header
-      className={`fixed inset-x-0 top-0 z-50 transition-colors duration-300 ${
-        solid
-          ? "border-b border-white/10 bg-navy-950/85 backdrop-blur"
-          : "bg-transparent"
+      className={`fixed inset-x-0 top-0 z-50 text-white transition-colors duration-300 ${
+        solid ? "border-b border-white/10 bg-oxford/95 backdrop-blur" : "bg-transparent"
       }`}
     >
-      <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
-        <Link href="/" aria-label="Jeff Flake home" className="shrink-0">
-          <SignatureLogo image={signature} height={52} />
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-2 sm:px-8">
+        <Link href="/" aria-label="Jeff Flake home" className="shrink-0 text-white">
+          <SignatureLogo image={signature} height={64} />
         </Link>
-        <nav className="flex items-center gap-1 sm:gap-2">
+        <nav className="flex items-center gap-5 sm:gap-7">
           {NAV.map((l) => (
             <Link
               key={l.href}
               href={l.href}
-              className="rounded-full px-3 py-1.5 text-sm font-medium text-white/75 transition-colors hover:text-white"
+              className="text-sm font-medium tracking-wide text-white/80 transition-colors hover:text-white"
             >
               {l.label}
             </Link>
           ))}
           <Link
             href="/#book"
-            className="ml-1 hidden rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-accent-bright sm:inline-block"
+            className="ml-1 hidden rounded-md bg-brass-soft px-5 py-2 text-sm font-semibold tracking-wide text-oxford transition-colors hover:bg-white sm:inline-block"
           >
             Book Jeff
           </Link>

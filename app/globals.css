@@ -8,20 +8,23 @@
   --color-brand: #1d4ed8;
   --color-brand-fg: #ffffff;
 
-  /* Public marketing site palette: deep navy + white + signature blue. */
-  --color-navy-950: #0a1024;
-  --color-navy-900: #0f1830;
-  --color-navy-800: #16213f;
-  --color-navy-700: #1f2d52;
-  --color-accent: #3b6fe0;
-  --color-accent-bright: #5b8def;
-  /* Warmth reserved for the island chapter. */
-  --color-warm: #c9803f;
-  --color-warm-deep: #7a3f1c;
+  /* Public marketing site palette: refined, institutional, light.
+     Warm parchment base, deep oxford navy, restrained brass-gold accent.
+     (Replaced the original dark navy/blue SaaS-style palette.) */
+  --color-paper: #f4f0e6;        /* base background (warm ivory) */
+  --color-paper-2: #ece5d6;      /* alternating sections (deeper parchment) */
+  --color-panel: #fcfaf4;        /* cards / raised surfaces (lightest) */
+  --color-oxford: #15233f;       /* deep navy: masthead, footer, headings */
+  --color-oxford-soft: #26395e;  /* navy hover */
+  --color-graphite: #262a33;     /* body text */
+  --color-slate: #5c606b;        /* muted text */
+  --color-brass: #93732f;        /* ornamental gold accent */
+  --color-brass-soft: #b29350;   /* gold on dark grounds */
+  --color-rule: #d6cdba;         /* hairline borders / rules */
 
   /* Fonts (wired via next/font CSS variables in the public layout). */
-  --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
-  --font-body: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-playfair), Georgia, "Times New Roman", serif;
+  --font-body: var(--font-public-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
 }
 
 :root {
@@ -69,16 +72,35 @@ body {
    Public marketing site
    =========================================================================== */
 
-/* Scope navy theming to the public site so the CRM keeps its light theme. */
+/* Light, institutional theme scoped to the public site (CRM keeps its own). */
 .public-site {
-  background: var(--color-navy-950);
-  color: #f4f6fb;
+  background: var(--color-paper);
+  color: var(--color-graphite);
   font-family: var(--font-body);
 }
 
 .public-site .font-display {
   font-family: var(--font-display);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
+}
+
+/* Letterspaced small-cap label with a short brass rule, a restrained
+   ornamental cue used above section headings. */
+.public-site .eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--color-brass);
+}
+.public-site .eyebrow::before {
+  content: "";
+  width: 2rem;
+  height: 1px;
+  background: var(--color-brass);
 }
 
 /* Smooth anchor scrolling for nav links, disabled under reduced-motion. */

@@ -32,7 +32,7 @@ export interface PreviewItem {
 // before it can reach the store.
 const ALLOWED_DATA_KEYS: Record<SectionKey, string[]> = {
   hero: ["kicker", "headline", "subhead", "cta_label", "image_key"],
-  story: ["title", "body", "image_key", "stats", "tone"],
+  story: ["title", "body", "image_key", "stats", "tone", "gallery", "video_url", "image_position"],
   quirk: ["label"],
   topic: ["title", "body"],
   audience_type: ["label"],
@@ -45,8 +45,8 @@ const ALLOWED_DATA_KEYS: Record<SectionKey, string[]> = {
     "poster_image_key",
   ],
   media_item: ["title", "outlet", "url"],
-  testimonial: ["quote", "attribution"],
-  book: ["headline", "body", "fallback_email", "image_key"],
+  testimonial: ["quote", "attribution", "image_key"],
+  book: ["headline", "body", "fallback_email", "image_key", "image_position"],
 };
 
 function buildSystemPrompt(): string {

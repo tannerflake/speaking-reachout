@@ -7,14 +7,12 @@ export function MediaSection({ items }: { items: MediaItemData[] }) {
   return (
     <section
       id="media"
-      className="scroll-mt-20 border-t border-white/10 bg-navy-900 py-20 sm:py-28"
+      className="scroll-mt-20 border-t border-rule bg-paper-2 py-20 sm:py-28"
     >
       <div className="mx-auto max-w-6xl px-5 sm:px-8">
         <Reveal>
-          <p className="text-sm font-medium uppercase tracking-[0.25em] text-accent-bright">
-            In the media
-          </p>
-          <h2 className="mt-3 font-display text-4xl font-semibold text-white sm:text-5xl">
+          <p className="eyebrow">In the media</p>
+          <h2 className="mt-4 font-display text-4xl font-medium text-oxford sm:text-5xl">
             Words on the record.
           </h2>
         </Reveal>
@@ -24,15 +22,15 @@ export function MediaSection({ items }: { items: MediaItemData[] }) {
             const Card = (
               <>
                 {item.outlet && (
-                  <span className="text-xs font-semibold uppercase tracking-widest text-accent-bright">
+                  <span className="text-xs font-semibold uppercase tracking-widest text-brass">
                     {item.outlet}
                   </span>
                 )}
-                <h3 className="mt-2 font-display text-xl font-medium leading-snug text-white">
+                <h3 className="mt-2 font-display text-xl font-medium leading-snug text-oxford">
                   {item.title}
                 </h3>
                 {item.url && (
-                  <span className="mt-4 inline-flex items-center gap-1 text-sm text-white/55 transition-colors group-hover:text-white">
+                  <span className="mt-4 inline-flex items-center gap-1 text-sm text-slate transition-colors group-hover:text-oxford">
                     Read <span aria-hidden>&rarr;</span>
                   </span>
                 )}
@@ -46,12 +44,12 @@ export function MediaSection({ items }: { items: MediaItemData[] }) {
                     href={item.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="group flex h-full flex-col rounded-2xl border border-white/10 bg-white/[0.02] p-6 transition-colors hover:border-accent/40 hover:bg-white/[0.04]"
+                    className="group flex h-full flex-col border border-rule bg-panel p-6 transition-colors hover:border-brass/50"
                   >
                     {Card}
                   </a>
                 ) : (
-                  <div className="flex h-full flex-col rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+                  <div className="flex h-full flex-col border border-rule bg-panel p-6">
                     {Card}
                   </div>
                 )}

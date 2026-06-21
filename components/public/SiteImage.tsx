@@ -14,6 +14,7 @@ export function SiteImage({
   aspect = "aspect-[4/3]",
   className = "",
   imgClassName = "",
+  objectPosition,
   sizes = "100vw",
   priority = false,
 }: {
@@ -23,6 +24,8 @@ export function SiteImage({
   className?: string;
   /** Extra classes for the <img> itself (e.g. responsive object-position). */
   imgClassName?: string;
+  /** CSS object-position (e.g. "50% 20%") to reframe a cropped photo. */
+  objectPosition?: string;
   sizes?: string;
   priority?: boolean;
 }) {
@@ -42,14 +45,15 @@ export function SiteImage({
           sizes={sizes}
           priority={priority}
           className={`object-cover ${imgClassName}`}
+          style={objectPosition ? { objectPosition } : undefined}
         />
       ) : (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-navy-800 p-4 text-center">
-          <span className="rounded bg-navy-700 px-2 py-0.5 font-mono text-[11px] tracking-wide text-accent-bright">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 border border-rule bg-paper-2 p-4 text-center">
+          <span className="bg-oxford/10 px-2 py-0.5 font-mono text-[11px] tracking-wide text-oxford">
             {imageKey}
           </span>
           {image?.subject && (
-            <span className="max-w-[80%] text-xs leading-snug text-white/45">
+            <span className="max-w-[80%] text-xs leading-snug text-slate">
               {image.subject}
             </span>
           )}

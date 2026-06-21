@@ -64,6 +64,12 @@ export interface StoryData {
   image_key?: string;
   stats?: StoryStat[];
   tone?: "warm" | "default";
+  /** Extra image keys shown as a gallery (used for the Island centerpiece). */
+  gallery?: string[];
+  /** Optional embedded video (YouTube) for a richer chapter. */
+  video_url?: string;
+  /** CSS object-position for the main photo (e.g. "50% 20%") to reframe a crop. */
+  image_position?: string;
 }
 
 export interface TopicData {
@@ -93,6 +99,8 @@ export interface MediaItemData {
 export interface TestimonialData {
   quote?: string;
   attribution?: string;
+  /** Optional logo/image shown faintly behind the card (e.g. a school crest). */
+  image_key?: string;
 }
 
 export interface BookData {
@@ -100,6 +108,8 @@ export interface BookData {
   body?: string;
   fallback_email?: string;
   image_key?: string;
+  /** CSS object-position for the portrait (e.g. "50% 20%"). */
+  image_position?: string;
 }
 
 export interface LabelData {

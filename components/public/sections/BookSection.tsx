@@ -16,7 +16,7 @@ export function BookSection({
   return (
     <section
       id="book"
-      className="scroll-mt-20 border-t border-white/10 bg-navy-900 py-20 sm:py-28"
+      className="scroll-mt-20 border-t border-rule bg-paper py-20 sm:py-28"
     >
       <div className="mx-auto grid max-w-6xl gap-12 px-5 sm:px-8 lg:grid-cols-2 lg:items-center lg:gap-16">
         <Reveal direction="right">
@@ -25,7 +25,8 @@ export function BookSection({
               image={images[imageKey]}
               imageKey={imageKey}
               aspect="aspect-[4/5]"
-              className="rounded-3xl ring-1 ring-white/10"
+              className="border border-rule"
+              objectPosition={data.image_position}
               sizes="(max-width: 1024px) 100vw, 50vw"
             />
           </div>
@@ -33,11 +34,11 @@ export function BookSection({
 
         <Reveal direction="left" delay={0.1}>
           <div>
-            <h2 className="font-display text-4xl font-semibold leading-tight text-white sm:text-5xl">
+            <h2 className="font-display text-4xl font-medium leading-tight text-oxford sm:text-5xl">
               {data.headline ?? "Book Jeff Flake as a speaker."}
             </h2>
             {data.body && (
-              <p className="mt-4 text-lg leading-relaxed text-white/70">
+              <p className="mt-4 text-lg leading-relaxed text-graphite/80">
                 {data.body}
               </p>
             )}

@@ -22,13 +22,11 @@ export default async function BioPage() {
     <>
       <PublicHeader signature={signature} />
       <main className="mx-auto max-w-3xl px-5 pb-24 pt-32 sm:px-8">
-        <p className="text-sm font-medium uppercase tracking-[0.25em] text-accent-bright">
-          Biography
-        </p>
-        <h1 className="mt-3 font-display text-5xl font-semibold leading-tight text-white">
+        <p className="eyebrow">Biography</p>
+        <h1 className="mt-4 font-display text-5xl font-medium leading-tight text-oxford">
           Jeff Flake
         </h1>
-        <p className="mt-5 text-lg leading-relaxed text-white/75">
+        <p className="mt-5 text-lg leading-relaxed text-graphite/85">
           Senator. Ambassador. Author. A voice that challenges without
           polarizing.
         </p>
@@ -42,13 +40,13 @@ export default async function BioPage() {
                   image={c.images[imageKey]}
                   imageKey={imageKey}
                   aspect="aspect-[16/9]"
-                  className="rounded-2xl ring-1 ring-white/10"
+                  className="border border-rule"
                   sizes="(max-width: 768px) 100vw, 768px"
                 />
-                <h2 className="mt-6 font-display text-3xl font-semibold text-white">
+                <h2 className="mt-6 font-display text-3xl font-medium text-oxford">
                   {beat.title}
                 </h2>
-                <p className="mt-4 text-lg leading-relaxed text-white/75">
+                <p className="mt-4 text-lg leading-relaxed text-graphite/85">
                   {beat.body}
                 </p>
               </article>
@@ -59,7 +57,7 @@ export default async function BioPage() {
         <div className="mt-16">
           <Link
             href="/#book"
-            className="inline-flex items-center gap-2 rounded-full bg-accent px-7 py-3.5 text-base font-semibold text-white transition-colors hover:bg-accent-bright"
+            className="inline-flex items-center gap-2 rounded-md bg-oxford px-7 py-3.5 text-base font-semibold tracking-wide text-white transition-colors hover:bg-oxford-soft"
           >
             Book Jeff as a speaker
             <span aria-hidden>&rarr;</span>

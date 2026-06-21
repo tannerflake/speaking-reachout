@@ -1,16 +1,17 @@
 import type { Metadata } from "next";
-import { Fraunces, Inter } from "next/font/google";
+import { Playfair_Display, Public_Sans } from "next/font/google";
 
-const fraunces = Fraunces({
+// Classic high-contrast serif for headings; Public Sans (the U.S. government
+// typeface) for body, for a refined, institutional feel.
+const playfair = Playfair_Display({
   subsets: ["latin"],
-  variable: "--font-fraunces",
+  variable: "--font-playfair",
   display: "swap",
-  axes: ["opsz"],
 });
 
-const inter = Inter({
+const publicSans = Public_Sans({
   subsets: ["latin"],
-  variable: "--font-inter",
+  variable: "--font-public-sans",
   display: "swap",
 });
 
@@ -40,7 +41,7 @@ export default function PublicLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className={`public-site ${fraunces.variable} ${inter.variable}`}>
+    <div className={`public-site ${playfair.variable} ${publicSans.variable}`}>
       {children}
     </div>
   );

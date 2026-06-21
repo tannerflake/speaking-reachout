@@ -13,16 +13,23 @@ insert into site_images (image_key, storage_path, alt_text, subject) values
   ('story_ranch',        null, 'Jeff Flake, Snowflake Arizona ranch',     'Jeff as a kid / Snowflake ranch'),
   ('story_congress',     null, 'Jeff Flake official portrait',            'Capitol / official portrait'),
   ('story_island',       null, 'Desert island',                           'Desert island / survival'),
+  ('story_island_2',     null, 'Desert island, survival',                 'Island chapter, additional photo'),
+  ('story_island_3',     null, 'Desert island, survival',                 'Island chapter, additional photo'),
   ('story_ambassador',   null, 'Ambassador Jeff Flake in Turkiye',        'Turkiye / NATO / diplomatic'),
   ('story_now',          null, 'Jeff Flake at ASU',                       'ASU IOP / WTC Utah'),
   ('media_cuban_poster', null, 'Jeff Flake in conversation with Mark Cuban at ASU', 'Poster frame of the Cuban talk'),
-  ('book_portrait',      null, 'Ambassador Jeff Flake',                   'Strong portrait (current contact-page headshot works)')
+  ('book_portrait',      null, 'Ambassador Jeff Flake',                   'Strong portrait (current contact-page headshot works)'),
+  -- Faint background logos for the "What audiences say" cards.
+  ('testimonial_rutgers_university',                  null, 'Rutgers University logo',                  'Rutgers University logo (testimonial background)'),
+  ('testimonial_tufts_university',                    null, 'Tufts University logo',                    'Tufts University logo (testimonial background)'),
+  ('testimonial_united_business_media',              null, 'United Business Media logo',               'United Business Media logo (testimonial background)'),
+  ('testimonial_amplified_events_strategy',          null, 'Amplified Events Strategy logo',           'Amplified Events Strategy logo (testimonial background)'),
+  ('testimonial_hudson_library_and_historical_society', null, 'Hudson Library and Historical Society logo', 'Hudson Library and Historical Society logo (testimonial background)')
 on conflict (image_key) do nothing;
 
 -- ---- Hero ------------------------------------------------------------------
 insert into site_content (id, section_key, sort_order, data) values
   ('10000000-0000-4000-8000-000000000001', 'hero', 0, jsonb_build_object(
-    'kicker',    'Jeff Flake, in brief',
     'headline',  'Book Ambassador Jeff Flake.',
     'subhead',   'Senator. Ambassador. Author. A voice that challenges without polarizing.',
     'cta_label', 'Book Jeff as a Speaker',
@@ -41,17 +48,15 @@ insert into site_content (id, section_key, sort_order, data) values
     'title', '18 Years in Congress',
     'body',  'Eighteen years representing Arizona in Washington. Twelve years in the House, six in the Senate. He built a reputation for principle over politics.',
     'image_key', 'story_congress',
-    'stats', jsonb_build_array(
-      jsonb_build_object('value', 18, 'label', 'Years'),
-      jsonb_build_object('value', 12, 'label', 'House'),
-      jsonb_build_object('value', 6,  'label', 'Senate')
-    )
+    'image_position', '50% 20%'
   )),
   ('20000000-0000-4000-8000-000000000003', 'story', 3, jsonb_build_object(
     'title', 'The Island',
     'body',  'Four times he has been dropped on a remote desert island with little more than his wits. Once, he survived a week stranded with a U.S. senator from across the aisle. It was a living metaphor for what he believes: that Republicans and Democrats can still figure out how to work together.',
     'image_key', 'story_island',
-    'tone', 'warm'
+    'tone', 'warm',
+    'gallery', jsonb_build_array('story_island_2', 'story_island_3'),
+    'video_url', 'https://www.youtube.com/watch?v=3vjA8sDxDuQ'
   )),
   ('20000000-0000-4000-8000-000000000004', 'story', 4, jsonb_build_object(
     'title', 'Ambassador to Turkiye',
@@ -63,15 +68,6 @@ insert into site_content (id, section_key, sort_order, data) values
     'body',  'Today he leads as founding Director of the Institute of Politics at Arizona State University and Chairman of the Board of World Trade Center Utah. He is also a New York Times bestselling author and a visiting fellow at Brigham Young University.',
     'image_key', 'story_now'
   ))
-on conflict (id) do nothing;
-
--- ---- Quirks strip ----------------------------------------------------------
-insert into site_content (id, section_key, sort_order, data) values
-  ('30000000-0000-4000-8000-000000000001', 'quirk', 1, jsonb_build_object('label', 'Born in Snowflake, Arizona')),
-  ('30000000-0000-4000-8000-000000000002', 'quirk', 2, jsonb_build_object('label', 'Cattle-ranch upbringing')),
-  ('30000000-0000-4000-8000-000000000003', 'quirk', 3, jsonb_build_object('label', 'Four-time desert-island survivalist')),
-  ('30000000-0000-4000-8000-000000000004', 'quirk', 4, jsonb_build_object('label', 'Father of five')),
-  ('30000000-0000-4000-8000-000000000005', 'quirk', 5, jsonb_build_object('label', 'Knighted by Sweden'))
 on conflict (id) do nothing;
 
 -- ---- Speaking topics -------------------------------------------------------
@@ -154,23 +150,28 @@ on conflict (id) do nothing;
 insert into site_content (id, section_key, sort_order, data) values
   ('90000000-0000-4000-8000-000000000001', 'testimonial', 1, jsonb_build_object(
     'quote', 'The fireside chat and the informal session gave students an open dialogue with someone who has navigated national and international politics.',
-    'attribution', 'Rutgers University'
+    'attribution', 'Rutgers University',
+    'image_key', 'testimonial_rutgers_university'
   )),
   ('90000000-0000-4000-8000-000000000002', 'testimonial', 2, jsonb_build_object(
     'quote', 'A packed auditorium and lasting positive feedback. Students especially valued the private session.',
-    'attribution', 'Tufts University'
+    'attribution', 'Tufts University',
+    'image_key', 'testimonial_tufts_university'
   )),
   ('90000000-0000-4000-8000-000000000003', 'testimonial', 3, jsonb_build_object(
     'quote', 'Light-hearted, relatable anecdotes about family and early political life. Pleasant and flexible to work with.',
-    'attribution', 'United Business Media'
+    'attribution', 'United Business Media',
+    'image_key', 'testimonial_united_business_media'
   )),
   ('90000000-0000-4000-8000-000000000004', 'testimonial', 4, jsonb_build_object(
     'quote', 'Engaging, personal, a real professional. We would invite him back to any event.',
-    'attribution', 'Amplified Events Strategy'
+    'attribution', 'Amplified Events Strategy',
+    'image_key', 'testimonial_amplified_events_strategy'
   )),
   ('90000000-0000-4000-8000-000000000005', 'testimonial', 5, jsonb_build_object(
     'quote', 'We loved him, and the event went very smoothly.',
-    'attribution', 'Hudson Library & Historical Society'
+    'attribution', 'Hudson Library & Historical Society',
+    'image_key', 'testimonial_hudson_library_and_historical_society'
   ))
 on conflict (id) do nothing;
 
@@ -180,6 +181,7 @@ insert into site_content (id, section_key, sort_order, data) values
     'headline',       'Book Jeff Flake as a speaker.',
     'body',           'Tell us about your event and we will be in touch shortly.',
     'fallback_email', 'cheryl@jeffflake.com',
-    'image_key',      'book_portrait'
+    'image_key',      'book_portrait',
+    'image_position', '50% 20%'
   ))
 on conflict (id) do nothing;

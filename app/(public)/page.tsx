@@ -34,7 +34,7 @@ export default async function HomePage() {
         />
         <FeaturedVideo data={c.featuredVideo} images={c.images} />
         <MediaSection items={c.mediaItems} />
-        <Testimonials items={c.testimonials} />
+        <Testimonials items={c.testimonials} images={c.images} />
         <BookSection data={c.book} images={c.images} />
       </main>
       <PublicFooter signature={signature} email={c.book.fallback_email} />

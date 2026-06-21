@@ -35,10 +35,11 @@ export function SignatureLogo({
   }
 
   // Fallback wordmark scales with the same height so swapping in a real
-  // signature keeps the header/footer proportions consistent.
+  // signature keeps the header/footer proportions consistent. Inherits color
+  // from its parent (white over the hero/masthead, etc.).
   return (
     <span
-      className={`font-display italic leading-none text-white ${className}`}
+      className={`font-display italic leading-none ${className}`}
       style={{ fontSize: Math.round(height * 0.95) }}
     >
       Jeff Flake

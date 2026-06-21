@@ -23,7 +23,7 @@ export default async function MediaPage() {
       <PublicHeader signature={signature} />
       <main className="pt-20">
         <div className="mx-auto max-w-6xl px-5 pt-12 sm:px-8">
-          <h1 className="font-display text-5xl font-semibold text-white">
+          <h1 className="font-display text-5xl font-medium text-oxford">
             In the Media
           </h1>
         </div>
