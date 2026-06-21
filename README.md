@@ -109,22 +109,31 @@ web-search tool for lead discovery and outreach research. No extra setup needed.
 
 ## 5. Contact resolution (optional, swappable)
 
-Discovery finds a public contact email via Claude + web search by default and
-**never guesses** addresses — if none is found the contact is stored as
-`needs_lookup` and flagged in the UI.
+Contact emails are **never guessed**. There are two paths, deliberately split so
+a paid lookup provider is only billed when you choose to use it:
 
-To plug in a dedicated email-finding API later, set `CONTACT_RESOLVER` and the
-matching key:
+- **Discovery (free, no credits):** uses only the public contact Claude already
+  surfaces during its web-search pass. It never calls Hunter/Apollo, so a 50-lead
+  Discover run costs **zero** email-lookup credits. Leads with no public email
+  found land as `needs_lookup`.
+- **On-demand (paid, one lookup at a time):** on a lead's page, a contact
+  without an email shows a **"Find email via {provider}"** button plus a manual
+  email field. The paid provider (Hunter/Apollo) is hit **only** when you click
+  that button, for that one lead — so you spend a credit only on leads you
+  actually pursue, and you review the found address before sending.
+
+Configure the on-demand provider:
 
 ```
-CONTACT_RESOLVER=claude   # default
-CONTACT_RESOLVER=hunter   # set HUNTER_API_KEY
+CONTACT_RESOLVER=claude   # default — no paid lookups; "Find email" is disabled, use manual entry
+CONTACT_RESOLVER=hunter   # set HUNTER_API_KEY  (Free plan = 50 searches/month)
 CONTACT_RESOLVER=apollo   # set APOLLO_API_KEY
 ```
 
 The resolver is a small swappable interface
-([`lib/contacts/resolver.ts`](lib/contacts/resolver.ts)); add a new provider by
-implementing `ContactResolver` and wiring it into `getContactResolver()`.
+([`lib/contacts/resolver.ts`](lib/contacts/resolver.ts)): `getInlineContactResolver()`
+is the free discovery path; `getContactResolver()` is the env-selected paid path
+used by the on-demand action. Add a provider by implementing `ContactResolver`.
 
 ---
 

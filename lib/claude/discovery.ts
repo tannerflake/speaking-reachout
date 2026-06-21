@@ -4,7 +4,7 @@ import {
   discoveryRulesPrompt,
   filterDiscoveredLeads,
 } from "@/lib/claude/rules";
-import { getContactResolver } from "@/lib/contacts/resolver";
+import { getInlineContactResolver } from "@/lib/contacts/resolver";
 import type { DiscoveredLead, LeadType, TailoringRule } from "@/lib/types";
 import { domainFromUrl, normalizeName } from "@/lib/utils";
 
@@ -116,8 +116,11 @@ export async function discoverLeads(params: {
     }
   }
 
-  // Resolve contacts via the configured provider (Section 5, step 2).
-  const resolver = getContactResolver();
+  // Resolve contacts using ONLY the free inline (Claude) contact captured
+  // during the web-search pass — discovery never calls the paid provider
+  // (Hunter/Apollo), so a large run costs zero email-lookup credits. The paid
+  // provider is invoked later, on-demand, per lead the operator pursues.
+  const resolver = getInlineContactResolver();
   const resolved = await mapWithConcurrency(survivors, 4, async (lead) => {
     try {
       const contact = await resolver.resolve({

@@ -194,7 +194,12 @@ function roleScore(position?: string): number {
   return 0;
 }
 
-/** Select the resolver from CONTACT_RESOLVER, falling back to claude. */
+/**
+ * Select the env-configured resolver (CONTACT_RESOLVER), falling back to claude.
+ * This is the PAID path — it may hit an external API (Hunter/Apollo) that
+ * costs credits. Only call it from an explicit, operator-triggered action
+ * (e.g. "Find email" on a lead), never in bulk during discovery.
+ */
 export function getContactResolver(): ContactResolver {
   const choice = (getEnv("CONTACT_RESOLVER") ?? "claude").toLowerCase();
   if (choice === "hunter") {
@@ -206,4 +211,18 @@ export function getContactResolver(): ContactResolver {
     if (key) return new ApolloContactResolver(key);
   }
   return new ClaudeContactResolver();
+}
+
+/**
+ * Free resolver used during discovery — only reuses the contact Claude already
+ * surfaced inline (no extra API cost). Never hits Hunter/Apollo, so a large
+ * discovery run consumes zero external email-lookup credits.
+ */
+export function getInlineContactResolver(): ContactResolver {
+  return new ClaudeContactResolver();
+}
+
+/** Effective resolver name after accounting for missing keys. */
+export function contactResolverName(): "claude" | "hunter" | "apollo" {
+  return getContactResolver().name as "claude" | "hunter" | "apollo";
 }

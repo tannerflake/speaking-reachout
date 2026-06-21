@@ -11,7 +11,9 @@ import { OutreachManager } from "@/components/OutreachManager";
 import { BookingForm } from "@/components/BookingForm";
 import { ReachOutAgainButton } from "@/components/ReachOutAgainButton";
 import { AddNote } from "@/components/AddNote";
-import { formatDate, formatDateTime } from "@/lib/utils";
+import { ContactEmail } from "@/components/ContactEmail";
+import { contactResolverName } from "@/lib/contacts/resolver";
+import { formatDate, formatDateTime, looksLikeRealEmail } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 // Drafting/sending outreach runs web-search generations — give it headroom.
@@ -28,6 +30,12 @@ export default async function LeadDetailPage({
 
   const interactions = await getLeadInteractions(id);
   const hasRecurringBooking = lead.bookings.some((b) => b.is_recurring);
+
+  // On-demand email lookup is available only when a paid provider is configured
+  // and the lead has a domain to search. (Hunter is never called automatically.)
+  const resolverName = contactResolverName();
+  const canResolve =
+    resolverName !== "claude" && Boolean(lead.website || lead.source_url);
 
   return (
     <div className="space-y-6">
@@ -133,37 +141,22 @@ export default async function LeadDetailPage({
                       </div>
                       <ContactStatusBadge status={c.contact_status} />
                     </div>
-                    <div className="mt-1 text-zinc-600">
-                      {c.email ? (
+                    {looksLikeRealEmail(c.email) ? (
+                      <div className="mt-1 text-zinc-600">
                         <a
                           href={`mailto:${c.email}`}
                           className="text-blue-600 hover:underline"
                         >
                           {c.email}
                         </a>
-                      ) : (
-                        "No email"
-                      )}
-                    </div>
-                    {c.contact_status === "needs_lookup" && (
-                      <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
-                        Find this email manually
-                        {lead.website ? (
-                          <>
-                            {" "}on the org website:{" "}
-                            <a
-                              href={lead.website}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="font-medium underline"
-                            >
-                              {lead.website}
-                            </a>
-                          </>
-                        ) : (
-                          " (no website on file)."
-                        )}
                       </div>
+                    ) : (
+                      <ContactEmail
+                        contactId={c.id}
+                        canResolve={canResolve}
+                        providerName={resolverName}
+                        website={lead.website}
+                      />
                     )}
                   </li>
                 ))}
