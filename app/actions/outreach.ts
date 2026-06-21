@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { getActiveRules, getLead } from "@/lib/data";
+import { getActiveRules, getActiveVoiceInjection, getLead } from "@/lib/data";
 import { generateOutreach } from "@/lib/claude/outreach";
 import { GmailNotConnectedError, sendGmail } from "@/lib/gmail/send";
 import { looksLikeRealEmail, pickPrimaryContact } from "@/lib/utils";
@@ -21,7 +21,10 @@ export async function generateDraft(
 ): Promise<DraftResult> {
   const lead = await getLead(leadId);
   if (!lead) return { error: "Lead not found." };
-  const rules = await getActiveRules();
+  const [rules, voiceInjection] = await Promise.all([
+    getActiveRules(),
+    getActiveVoiceInjection(),
+  ]);
 
   const contact: Contact | null = contactId
     ? (lead.contacts.find((c) => c.id === contactId) ??
@@ -29,7 +32,13 @@ export async function generateDraft(
     : pickPrimaryContact(lead.contacts);
 
   try {
-    const gen = await generateOutreach({ lead, contact, rules, oneOffInstruction: oneOff });
+    const gen = await generateOutreach({
+      lead,
+      contact,
+      rules,
+      oneOffInstruction: oneOff,
+      voiceInjection,
+    });
     const supabase = await createClient();
     const { data, error } = await supabase
       .from("outreach")
@@ -94,13 +103,22 @@ export async function regenerateDraft(
 
   const lead = await getLead(row.lead_id);
   if (!lead) return { error: "Lead not found." };
-  const rules = await getActiveRules();
+  const [rules, voiceInjection] = await Promise.all([
+    getActiveRules(),
+    getActiveVoiceInjection(),
+  ]);
   const contact =
     lead.contacts.find((c) => c.id === row.contact_id) ??
     pickPrimaryContact(lead.contacts);
 
   try {
-    const gen = await generateOutreach({ lead, contact, rules, oneOffInstruction: oneOff });
+    const gen = await generateOutreach({
+      lead,
+      contact,
+      rules,
+      oneOffInstruction: oneOff,
+      voiceInjection,
+    });
     const { error } = await supabase
       .from("outreach")
       .update({

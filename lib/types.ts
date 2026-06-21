@@ -121,8 +121,56 @@ export interface GmailConnection {
   refresh_token: string | null;
   access_token: string | null;
   expiry: string | null;
+  scopes: string | null;
   connected_at: string;
   updated_at: string;
+}
+
+// ---- Voice & Insights -----------------------------------------------------
+export type InsightCategory = "voice" | "tactics" | "structure" | "cadence";
+
+export interface SuggestedRule {
+  id: string;
+  rule_type: RuleType;
+  raw_instruction: string;
+  structured_value: Record<string, unknown>;
+  accepted: boolean;
+}
+
+export interface VoiceProfile {
+  id: string;
+  version: number;
+  is_active: boolean;
+  tone_summary: string | null;
+  structure_summary: string | null;
+  tactics_summary: string | null;
+  cadence_summary: string | null;
+  prompt_injection: string | null;
+  suggested_rules: SuggestedRule[];
+  source_message_count: number;
+  created_at: string;
+}
+
+export interface EmailInsight {
+  id: string;
+  voice_profile_id: string;
+  category: InsightCategory;
+  insight: string;
+  example_excerpt: string | null;
+  created_at: string;
+}
+
+/** In-memory representation of a fetched Gmail message (never persisted raw). */
+export interface IngestedMessage {
+  id: string;
+  threadId: string;
+  labels: string[];
+  internalDate: string; // ISO
+  from: string;
+  to: string;
+  subject: string;
+  body: string;
+  isSent: boolean;
 }
 
 // ---- Lead + relations (used in detail views) ------------------------------

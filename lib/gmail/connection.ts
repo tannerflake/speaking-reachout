@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
+import { GMAIL_READONLY_SCOPE } from "@/lib/gmail/oauth";
 import type { GmailConnection } from "@/lib/types";
 
 // All gmail_connection access goes through the service-role client — the table
@@ -19,11 +20,13 @@ export async function getGmailConnection(): Promise<GmailConnection | null> {
 export async function getGmailStatus(): Promise<{
   connected: boolean;
   email: string | null;
+  canRead: boolean;
 }> {
   const conn = await getGmailConnection();
   return {
     connected: Boolean(conn?.refresh_token),
     email: conn?.email ?? null,
+    canRead: Boolean(conn?.scopes?.includes(GMAIL_READONLY_SCOPE)),
   };
 }
 
@@ -32,10 +35,11 @@ export async function saveGmailTokens(input: {
   refresh_token?: string | null;
   access_token?: string | null;
   expiry?: string | null;
+  scopes?: string | null;
 }): Promise<void> {
   const admin = createAdminClient();
 
-  // Preserve an existing refresh token if Google didn't return a new one.
+  // Preserve an existing refresh token / scopes if Google didn't return new ones.
   const existing = await getGmailConnection();
   const refresh_token = input.refresh_token ?? existing?.refresh_token ?? null;
 
@@ -46,6 +50,7 @@ export async function saveGmailTokens(input: {
       refresh_token,
       access_token: input.access_token ?? null,
       expiry: input.expiry ?? null,
+      scopes: input.scopes ?? existing?.scopes ?? null,
     },
     { onConflict: "id" },
   );

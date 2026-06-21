@@ -31,10 +31,19 @@ export async function generateOutreach(params: {
   contact: Contact | null;
   rules: TailoringRule[];
   oneOffInstruction?: string;
+  /** Active voice_profile.prompt_injection (Voice & Insights feature). */
+  voiceInjection?: string | null;
 }): Promise<GeneratedOutreach> {
-  const { lead, contact, rules, oneOffInstruction } = params;
+  const { lead, contact, rules, oneOffInstruction, voiceInjection } = params;
 
-  const system = OUTREACH_SYSTEM_BASE + copyStyleInstructions(rules);
+  // Learned voice goes first; operator style rules come after and win on
+  // conflict (Section 6 precedence: stated wishes beat inferred patterns).
+  const voiceBlock = voiceInjection
+    ? `\n\n--- Jeff's learned voice & proven tactics (distilled from his real email history) ---\n${voiceInjection}\n--- end learned voice ---\nIf any operator style rule below conflicts with this learned voice, the operator rule wins.\n`
+    : "";
+
+  const system =
+    OUTREACH_SYSTEM_BASE + voiceBlock + copyStyleInstructions(rules);
 
   const contactLine = contact
     ? `Contact: ${contact.name ?? "(name unknown)"}${

@@ -4,6 +4,7 @@ import { domainFromUrl } from "@/lib/utils";
 import type {
   Booking,
   Contact,
+  EmailInsight,
   Interaction,
   Lead,
   LeadStatus,
@@ -11,6 +12,7 @@ import type {
   LeadWithRelations,
   Outreach,
   TailoringRule,
+  VoiceProfile,
 } from "@/lib/types";
 import { LEAD_STATUSES, PIPELINE_STATUSES } from "@/lib/types";
 
@@ -155,6 +157,56 @@ export async function getAllRules(): Promise<TailoringRule[]> {
     .select("*")
     .order("created_at", { ascending: false });
   return (data as TailoringRule[]) ?? [];
+}
+
+// ---- Voice & Insights ------------------------------------------------------
+
+export async function getActiveVoiceProfile(): Promise<VoiceProfile | null> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("voice_profile")
+    .select("*")
+    .eq("is_active", true)
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data as VoiceProfile) ?? null;
+}
+
+export async function getVoiceInsights(
+  profileId: string,
+): Promise<EmailInsight[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("email_insights")
+    .select("*")
+    .eq("voice_profile_id", profileId)
+    .order("created_at", { ascending: true });
+  return (data as EmailInsight[]) ?? [];
+}
+
+/** The active learned voice block injected into outreach generation. */
+export async function getActiveVoiceInjection(): Promise<string | null> {
+  const profile = await getActiveVoiceProfile();
+  return profile?.prompt_injection ?? null;
+}
+
+/** All processed Gmail message IDs, for incremental-analysis dedup. */
+export async function getProcessedMessageIds(): Promise<Set<string>> {
+  const admin = createAdminClient();
+  const ids = new Set<string>();
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await admin
+      .from("processed_messages")
+      .select("gmail_message_id")
+      .range(from, from + pageSize - 1);
+    if (error || !data || data.length === 0) break;
+    for (const row of data)
+      ids.add((row as { gmail_message_id: string }).gmail_message_id);
+    if (data.length < pageSize) break;
+  }
+  return ids;
 }
 
 /**

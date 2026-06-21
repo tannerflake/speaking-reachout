@@ -109,6 +109,30 @@ export function pickPrimaryContact(contacts: Contact[]): Contact | null {
   );
 }
 
+/** Run an async fn over items with bounded concurrency, preserving order. */
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  async function worker() {
+    for (;;) {
+      const i = cursor;
+      cursor += 1;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  const workers = Array.from(
+    { length: Math.max(1, Math.min(concurrency, items.length)) },
+    () => worker(),
+  );
+  await Promise.all(workers);
+  return results;
+}
+
 /** Basic email shape check — used to reject obviously-fake provider output. */
 export function looksLikeRealEmail(email: string | null | undefined): boolean {
   if (!email) return false;

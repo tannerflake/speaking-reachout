@@ -43,15 +43,20 @@ cp .env.example .env.local   # then fill in the values (see below)
 
 ### Create the schema
 
-Open your Supabase project → **SQL Editor** and run the migration in
-[`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql). It
-creates all tables (`leads`, `contacts`, `outreach`, `bookings`,
-`tailoring_rules`, `interactions`) plus a single-row `gmail_connection` table
-for the Gmail refresh token, enables Row Level Security, and adds policies so
-**only authenticated users** can read/write app data. The `gmail_connection`
-table is reachable only by the service-role key.
+Open your Supabase project → **SQL Editor** and run **both** migrations in
+order:
 
-> Using the Supabase CLI instead? `supabase db push` will apply the migration.
+1. [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql) —
+   core tables (`leads`, `contacts`, `outreach`, `bookings`, `tailoring_rules`,
+   `interactions`) plus a single-row `gmail_connection` table for the Gmail
+   refresh token, RLS, and policies so **only authenticated users** can
+   read/write app data (`gmail_connection` is reachable only by the
+   service-role key).
+2. [`supabase/migrations/0002_voice_insights.sql`](supabase/migrations/0002_voice_insights.sql)
+   — the Voice & Insights tables (`voice_profile`, `email_insights`,
+   `processed_messages`) and a `scopes` column on `gmail_connection`.
+
+> Using the Supabase CLI instead? `supabase db push` will apply both.
 
 ### Create the single operator account
 
@@ -83,7 +88,8 @@ web-search tool for lead discovery and outreach research. No extra setup needed.
    pick) a project → **APIs & Services → Library** → enable **Gmail API**.
 2. **APIs & Services → OAuth consent screen**: configure it (External is fine),
    and while it's in "Testing", add your operator Google account under **Test
-   users**. Scopes used: `gmail.send`, `userinfo.email`, `openid`.
+   users**. Scopes used: `gmail.send` (send outreach), `gmail.readonly` (read
+   the archive for Voice & Insights), `userinfo.email`, `openid`.
 3. **APIs & Services → Credentials → Create Credentials → OAuth client ID**:
    - Application type: **Web application**
    - **Authorized redirect URIs**: add exactly the value you set for
@@ -174,6 +180,35 @@ limit. Locally there is no such cap.
 - **Pipeline**: status is operator-editable at any point. `booked` opens a
   booking form; recurring bookings expose **Reach out again**, which spins up a
   fresh outreach draft while preserving history. Every status change is logged.
+- **Voice & Insights** (`/voice-insights`) →
+  [`lib/gmail/ingest.ts`](lib/gmail/ingest.ts) +
+  [`lib/claude/voice.ts`](lib/claude/voice.ts): connect Gmail read-only, then
+  **Run analysis** ingests the archive (SENT-prioritized, paginated list +
+  batched get, quoted replies/signatures stripped) and runs a multi-pass Claude
+  analysis (voice, tactics, structure, cadence) that synthesizes an active
+  `voice_profile`. Its condensed `prompt_injection` is injected into **every**
+  outreach generation (operator `tailoring_rules` win on conflict), and the run
+  surfaces suggested rules for one-click acceptance into Tailoring.
+  **Re-analyze** processes only new messages (deduped by ID via
+  `processed_messages`).
+
+### Voice & Insights — scope, privacy, and v2
+
+- **Read-only by design.** The feature adds the `gmail.readonly` scope purely to
+  analyze the archive. After upgrading from the send-only base app you must
+  **reconnect Gmail once** to grant read access — the tab detects this and shows
+  a "Reconnect with read access" prompt.
+- **Privacy.** Raw email bodies are fetched server-side, analyzed, and
+  **discarded** — they are never persisted. Only the distilled summaries, short
+  example excerpts (from Jeff's own sent writing), and processed message IDs are
+  stored. Nothing is logged client-side. Confirm Jeff is comfortable having the
+  full archive analyzed before running it — it contains third parties' private
+  replies.
+- **Planned but not built (v2):** automatic/scheduled background Gmail sync,
+  reply-thread conversation modeling (multi-turn intelligence), and real-time
+  ingestion of new mail. App-sent outreach isn't re-scraped from Gmail — that
+  data already lives in the `outreach`/`interactions` tables. This feature is
+  intentionally manual and operator-triggered.
 
 ---
 
@@ -182,7 +217,9 @@ limit. Locally there is no such cap.
 These are intentionally **not** built (noted here so they aren't silently
 dropped):
 
-- Reply detection / inbox parsing (would need the `gmail.readonly` scope).
+- Live reply detection / inbox parsing for sent outreach. (Voice & Insights
+  does read the archive read-only for analysis, but real-time reply-thread
+  intelligence is still out — see its v2 notes above.)
 - Relationship nurturing, scheduling, contracts, payment.
 - Multi-user / roles / permissions beyond the single login.
 - Analytics beyond the basic pipeline counts.
@@ -199,9 +236,9 @@ app/
   login/                     login page
 components/                  client + presentational UI
 lib/
-  claude/                    discovery, outreach, rule parsing, style enforcement, client
+  claude/                    discovery, outreach, rule parsing, style, voice analysis, client
   contacts/                  swappable ContactResolver (claude | hunter | apollo)
-  gmail/                     OAuth, token storage, send
+  gmail/                     OAuth, token storage, send, archive ingestion
   supabase/                  server / admin / proxy-session clients
   data.ts                    server-side reads
   types.ts, utils.ts, env.ts

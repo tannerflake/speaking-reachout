@@ -8,6 +8,7 @@ const LINKS = [
   { href: "/", label: "Dashboard" },
   { href: "/leads", label: "Leads" },
   { href: "/discover", label: "Discover" },
+  { href: "/voice-insights", label: "Voice & Insights" },
   { href: "/settings/tailoring", label: "Tailoring" },
 ];
 

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { getActiveRules, getLead } from "@/lib/data";
+import { getActiveRules, getActiveVoiceInjection, getLead } from "@/lib/data";
 import { generateOutreach } from "@/lib/claude/outreach";
 import { pickPrimaryContact, statusLabel } from "@/lib/utils";
 import type { LeadStatus } from "@/lib/types";
@@ -91,7 +91,10 @@ export async function reachOutAgain(
   const lead = await getLead(leadId);
   if (!lead) return { error: "Lead not found." };
 
-  const rules = await getActiveRules();
+  const [rules, voiceInjection] = await Promise.all([
+    getActiveRules(),
+    getActiveVoiceInjection(),
+  ]);
   const contact = pickPrimaryContact(lead.contacts);
 
   try {
@@ -99,6 +102,7 @@ export async function reachOutAgain(
       lead,
       contact,
       rules,
+      voiceInjection,
       oneOffInstruction:
         "This is a returning/recurring venue we have worked with before. Warmly reference that we'd love to come back, and propose fresh topics for the next cycle.",
     });

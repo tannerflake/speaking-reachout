@@ -1,11 +1,15 @@
 import { google } from "googleapis";
 import { requireEnv } from "@/lib/env";
 
-// gmail.send to send mail; userinfo.email/openid so we can show which account
-// is connected. gmail.readonly (for reply detection) is intentionally NOT
-// requested — it's out of scope for v1 (see README).
+// gmail.send to send outreach; gmail.readonly to ingest the archive for the
+// Voice & Insights feature (read-only analysis of Jeff's mail);
+// userinfo.email/openid so we can show which account is connected.
+export const GMAIL_READONLY_SCOPE =
+  "https://www.googleapis.com/auth/gmail.readonly";
+
 export const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.send",
+  GMAIL_READONLY_SCOPE,
   "https://www.googleapis.com/auth/userinfo.email",
   "openid",
 ];

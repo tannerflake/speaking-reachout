@@ -35,6 +35,7 @@ export async function GET(request: NextRequest) {
       expiry: tokens.expiry_date
         ? new Date(tokens.expiry_date).toISOString()
         : null,
+      scopes: tokens.scope ?? null,
     });
 
     settingsUrl.searchParams.set(
