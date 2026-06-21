@@ -70,6 +70,8 @@ export interface StoryData {
   video_url?: string;
   /** CSS object-position for the main photo (e.g. "50% 20%") to reframe a crop. */
   image_position?: string;
+  /** CSS aspect-ratio for the main photo (e.g. "5/4") to widen/narrow the crop. */
+  image_aspect?: string;
 }
 
 export interface TopicData {

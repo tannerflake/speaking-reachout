@@ -9,7 +9,6 @@ const NAV = [
   { href: "/#story", label: "Story" },
   { href: "/#speaking", label: "Speaking" },
   { href: "/#media", label: "Media" },
-  { href: "/#book", label: "Book" },
 ];
 
 export function PublicHeader({ signature }: { signature: SiteImageRow | undefined }) {

@@ -52,6 +52,7 @@ export function StorySection({
                       image={images[imageKey]}
                       imageKey={imageKey}
                       aspect="aspect-[4/5]"
+                      aspectRatio={beat.image_aspect}
                       className={`border ${warm ? "border-brass/40" : "border-rule"}`}
                       objectPosition={beat.image_position}
                       sizes="(max-width: 640px) 100vw, 50vw"

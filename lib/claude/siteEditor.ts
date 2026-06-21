@@ -32,7 +32,7 @@ export interface PreviewItem {
 // before it can reach the store.
 const ALLOWED_DATA_KEYS: Record<SectionKey, string[]> = {
   hero: ["kicker", "headline", "subhead", "cta_label", "image_key"],
-  story: ["title", "body", "image_key", "stats", "tone", "gallery", "video_url", "image_position"],
+  story: ["title", "body", "image_key", "stats", "tone", "gallery", "video_url", "image_position", "image_aspect"],
   quirk: ["label"],
   topic: ["title", "body"],
   audience_type: ["label"],

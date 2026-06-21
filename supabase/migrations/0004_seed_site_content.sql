@@ -66,7 +66,9 @@ insert into site_content (id, section_key, sort_order, data) values
   ('20000000-0000-4000-8000-000000000005', 'story', 5, jsonb_build_object(
     'title', 'Now',
     'body',  'Today he leads as founding Director of the Institute of Politics at Arizona State University and Chairman of the Board of World Trade Center Utah. He is also a New York Times bestselling author and a visiting fellow at Brigham Young University.',
-    'image_key', 'story_now'
+    'image_key', 'story_now',
+    'image_aspect', '5/4',
+    'image_position', '40% 50%'
   ))
 on conflict (id) do nothing;
 

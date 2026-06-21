@@ -12,6 +12,7 @@ export function SiteImage({
   image,
   imageKey,
   aspect = "aspect-[4/3]",
+  aspectRatio,
   className = "",
   imgClassName = "",
   objectPosition,
@@ -21,6 +22,8 @@ export function SiteImage({
   image: SiteImageRow | undefined;
   imageKey: string;
   aspect?: string;
+  /** CSS aspect-ratio (e.g. "5/4") to override the default crop shape. */
+  aspectRatio?: string;
   className?: string;
   /** Extra classes for the <img> itself (e.g. responsive object-position). */
   imgClassName?: string;
@@ -34,7 +37,8 @@ export function SiteImage({
 
   return (
     <div
-      className={`relative overflow-hidden ${aspect} ${className}`}
+      className={`relative overflow-hidden ${aspectRatio ? "" : aspect} ${className}`}
+      style={aspectRatio ? { aspectRatio } : undefined}
       aria-hidden={url ? undefined : true}
     >
       {url ? (
