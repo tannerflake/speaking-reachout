@@ -13,8 +13,6 @@ insert into site_images (image_key, storage_path, alt_text, subject) values
   ('story_ranch',        null, 'Jeff Flake, Snowflake Arizona ranch',     'Jeff as a kid / Snowflake ranch'),
   ('story_congress',     null, 'Jeff Flake official portrait',            'Capitol / official portrait'),
   ('story_island',       null, 'Desert island',                           'Desert island / survival'),
-  ('story_island_2',     null, 'Desert island, survival',                 'Island chapter, additional photo'),
-  ('story_island_3',     null, 'Desert island, survival',                 'Island chapter, additional photo'),
   ('story_ambassador',   null, 'Ambassador Jeff Flake in Turkiye',        'Turkiye / NATO / diplomatic'),
   ('story_now',          null, 'Jeff Flake at ASU',                       'ASU IOP / WTC Utah'),
   ('media_cuban_poster', null, 'Jeff Flake in conversation with Mark Cuban at ASU', 'Poster frame of the Cuban talk'),
@@ -54,9 +52,7 @@ insert into site_content (id, section_key, sort_order, data) values
     'title', 'The Island',
     'body',  'Four times he has been dropped on a remote desert island with little more than his wits. Once, he survived a week stranded with a U.S. senator from across the aisle. It was a living metaphor for what he believes: that Republicans and Democrats can still figure out how to work together.',
     'image_key', 'story_island',
-    'tone', 'warm',
-    'gallery', jsonb_build_array('story_island_2', 'story_island_3'),
-    'video_url', 'https://www.youtube.com/watch?v=3vjA8sDxDuQ'
+    'tone', 'warm'
   )),
   ('20000000-0000-4000-8000-000000000004', 'story', 4, jsonb_build_object(
     'title', 'Ambassador to Turkiye',

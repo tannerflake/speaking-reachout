@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { imagePublicUrl, imageObjectPosition } from "@/lib/site/images";
+import { imagePublicUrl, imageFrameStyle } from "@/lib/site/images";
 import type { SiteImageRow } from "@/lib/site/types";
 
 /**
@@ -34,11 +34,12 @@ export function SiteImage({
 }) {
   const url = imagePublicUrl(image);
   const alt = image?.alt_text ?? imageKey;
-  // Compose the section's optional crop position with this image's own px nudge.
-  const position = imageObjectPosition(
+  // Compose the section's optional crop position with this image's own pan + zoom.
+  const frameStyle = imageFrameStyle(
     objectPosition,
     image?.offset_x,
     image?.offset_y,
+    image?.zoom,
   );
 
   return (
@@ -55,7 +56,7 @@ export function SiteImage({
           sizes={sizes}
           priority={priority}
           className={`object-cover ${imgClassName}`}
-          style={position ? { objectPosition: position } : undefined}
+          style={frameStyle}
         />
       ) : (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 border border-rule bg-paper-2 p-4 text-center">

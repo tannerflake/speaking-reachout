@@ -5,9 +5,13 @@ import { useRouter } from "next/navigation";
 import { uploadSiteImage } from "@/app/actions/siteEditor";
 import {
   imagePublicUrl,
-  imageObjectPosition,
+  imageFrameStyle,
   clampOffset,
+  clampZoom,
   MAX_IMAGE_OFFSET,
+  MIN_IMAGE_ZOOM,
+  MAX_IMAGE_ZOOM,
+  DEFAULT_IMAGE_ZOOM,
 } from "@/lib/site/images";
 import type { SiteImageRow } from "@/lib/site/types";
 
@@ -24,6 +28,7 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
   const [fileUrl, setFileUrl] = useState<string | null>(null);
   const [offsetX, setOffsetX] = useState(0);
   const [offsetY, setOffsetY] = useState(0);
+  const [zoom, setZoom] = useState(DEFAULT_IMAGE_ZOOM);
   const [pending, start] = useTransition();
   const formRef = useRef<HTMLFormElement>(null);
   const router = useRouter();
@@ -37,8 +42,9 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
 
   const existing = images.find((img) => img.image_key === imageKey.trim());
   const previewUrl = fileUrl ?? imagePublicUrl(existing);
-  const previewPosition = imageObjectPosition(undefined, offsetX, offsetY);
-  const centered = offsetX === 0 && offsetY === 0;
+  const previewStyle = imageFrameStyle(undefined, offsetX, offsetY, zoom);
+  const isDefault =
+    offsetX === 0 && offsetY === 0 && zoom === DEFAULT_IMAGE_ZOOM;
 
   function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     setFileUrl((prev) => {
@@ -57,6 +63,7 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
       if (match) {
         setOffsetX(clampOffset(match.offset_x));
         setOffsetY(clampOffset(match.offset_y));
+        setZoom(clampZoom(match.zoom));
       }
     }
   }
@@ -69,6 +76,7 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
     const fd = new FormData(form);
     fd.set("offset_x", String(offsetX));
     fd.set("offset_y", String(offsetY));
+    fd.set("zoom", String(zoom));
     start(async () => {
       const res = await uploadSiteImage(fd);
       if (!res.ok) {
@@ -80,6 +88,7 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
       setImageKey("");
       setOffsetX(0);
       setOffsetY(0);
+      setZoom(DEFAULT_IMAGE_ZOOM);
       setFileUrl((prev) => {
         if (prev) URL.revokeObjectURL(prev);
         return null;
@@ -145,23 +154,24 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
         <div className="rounded-md border border-zinc-200 bg-zinc-50 p-4">
           <div className="flex items-center justify-between">
             <label className="block text-sm font-medium text-zinc-700">
-              Position
+              Position &amp; zoom
             </label>
             <button
               type="button"
               onClick={() => {
                 setOffsetX(0);
                 setOffsetY(0);
+                setZoom(DEFAULT_IMAGE_ZOOM);
               }}
-              disabled={centered}
+              disabled={isDefault}
               className="text-xs font-medium text-blue-600 hover:text-blue-700 disabled:text-zinc-400"
             >
-              Center
+              Reset
             </button>
           </div>
           <p className="mt-0.5 text-xs text-zinc-500">
-            Slide to move the photo within its frame (max {MAX_IMAGE_OFFSET}px
-            each way).
+            Slide to move (max {MAX_IMAGE_OFFSET}px each way) or zoom the photo
+            within its frame.
           </p>
 
           <div className="mt-3 grid gap-4 sm:grid-cols-[1fr_auto]">
@@ -204,9 +214,26 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
                   aria-label="Vertical position"
                 />
               </div>
+              <div>
+                <div className="flex items-center justify-between text-xs text-zinc-500">
+                  <span>Fit</span>
+                  <span className="font-mono text-zinc-700">{zoom}%</span>
+                  <span>Zoom in</span>
+                </div>
+                <input
+                  type="range"
+                  min={MIN_IMAGE_ZOOM}
+                  max={MAX_IMAGE_ZOOM}
+                  step={1}
+                  value={zoom}
+                  onChange={(e) => setZoom(Number(e.target.value))}
+                  className="mt-1 w-full accent-blue-600"
+                  aria-label="Zoom"
+                />
+              </div>
             </div>
 
-            {/* Live preview using the exact object-position the site applies. */}
+            {/* Live preview using the exact framing CSS the site applies. */}
             <div className="relative h-32 w-full overflow-hidden rounded-md border border-zinc-300 bg-zinc-100 sm:w-44">
               {previewUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -214,11 +241,7 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
                   src={previewUrl}
                   alt="Position preview"
                   className="h-full w-full object-cover"
-                  style={
-                    previewPosition
-                      ? { objectPosition: previewPosition }
-                      : undefined
-                  }
+                  style={previewStyle}
                 />
               ) : (
                 <div className="flex h-full w-full items-center justify-center px-2 text-center text-xs text-zinc-400">

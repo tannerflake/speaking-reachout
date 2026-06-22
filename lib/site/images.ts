@@ -15,10 +15,21 @@ export function imagePublicUrl(image: SiteImageRow | undefined): string | null {
 /** Max framing nudge, in px, on each axis. Kept in sync with the DB check. */
 export const MAX_IMAGE_OFFSET = 100;
 
+/** Zoom bounds (percent). 100 = fit/no zoom. Kept in sync with the DB check. */
+export const MIN_IMAGE_ZOOM = 100;
+export const MAX_IMAGE_ZOOM = 200;
+export const DEFAULT_IMAGE_ZOOM = 100;
+
 /** Coerce any input to a whole-pixel offset within [-MAX, MAX]. */
 export function clampOffset(value: number | null | undefined): number {
   if (typeof value !== "number" || Number.isNaN(value)) return 0;
   return Math.max(-MAX_IMAGE_OFFSET, Math.min(MAX_IMAGE_OFFSET, Math.round(value)));
+}
+
+/** Coerce any input to a whole-percent zoom within [MIN, MAX]. */
+export function clampZoom(value: number | null | undefined): number {
+  if (typeof value !== "number" || Number.isNaN(value)) return DEFAULT_IMAGE_ZOOM;
+  return Math.max(MIN_IMAGE_ZOOM, Math.min(MAX_IMAGE_ZOOM, Math.round(value)));
 }
 
 /**
@@ -44,4 +55,26 @@ export function imageObjectPosition(
   const nudge = (b: string, o: number) =>
     o === 0 ? b : `calc(${b} ${o < 0 ? "+" : "-"} ${Math.abs(o)}px)`;
   return `${nudge(baseX, ox)} ${nudge(baseY, oy)}`;
+}
+
+/** Style object an image renders with: pan via object-position, zoom via a
+ * scale() transform anchored at the pan point. Shared by the public site and
+ * the uploader preview so both reframe identically. Undefined when there is
+ * nothing to apply (centered, no zoom). */
+export function imageFrameStyle(
+  base: string | undefined,
+  offsetX: number | null | undefined,
+  offsetY: number | null | undefined,
+  zoom: number | null | undefined,
+): { objectPosition?: string; transform?: string; transformOrigin?: string } | undefined {
+  const position = imageObjectPosition(base, offsetX, offsetY);
+  const z = clampZoom(zoom);
+  const style: { objectPosition?: string; transform?: string; transformOrigin?: string } = {};
+  if (position) style.objectPosition = position;
+  if (z !== DEFAULT_IMAGE_ZOOM) {
+    style.transform = `scale(${z / 100})`;
+    // Anchor the zoom at the pan focal point so panning + zoom stay coherent.
+    style.transformOrigin = position ?? "center";
+  }
+  return Object.keys(style).length > 0 ? style : undefined;
 }

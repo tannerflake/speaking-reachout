@@ -45,6 +45,8 @@ export interface SiteImageRow {
   offset_x?: number | null;
   /** Vertical framing nudge in px (-100..100). Positive moves the photo down. */
   offset_y?: number | null;
+  /** Zoom/magnification percent (100..200). 100 = fit, no zoom. */
+  zoom?: number | null;
 }
 
 // ---- Typed views of each section's `data` payload -------------------------

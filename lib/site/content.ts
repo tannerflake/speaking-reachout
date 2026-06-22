@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createPublicClient } from "@/lib/supabase/public";
-import { clampOffset } from "@/lib/site/images";
+import { clampOffset, clampZoom } from "@/lib/site/images";
 import type {
   BookData,
   EngagementData,
@@ -23,19 +23,19 @@ function bySort(a: SiteContentRow, b: SiteContentRow): number {
 const IMAGE_COLS_BASE = "image_key, storage_path, alt_text, subject";
 
 /**
- * Read all site_images rows with framing offsets normalized to numbers. Falls
- * back to the base columns if the offset_x/offset_y migration (0005) has not
- * been applied yet, so image rendering never breaks on a pending migration.
+ * Read all site_images rows with framing (offset_x/offset_y/zoom) normalized to
+ * numbers. Falls back to the base columns if the framing migration (0005) has
+ * not been applied yet, so image rendering never breaks on a pending migration.
  */
 export async function fetchSiteImageRows(
   supabase: SupabaseClient,
 ): Promise<SiteImageRow[]> {
-  const withOffsets = await supabase
+  const withFraming = await supabase
     .from("site_images")
-    .select(`${IMAGE_COLS_BASE}, offset_x, offset_y`)
+    .select(`${IMAGE_COLS_BASE}, offset_x, offset_y, zoom`)
     .order("image_key");
-  let data = withOffsets.data as SiteImageRow[] | null;
-  if (withOffsets.error) {
+  let data = withFraming.data as SiteImageRow[] | null;
+  if (withFraming.error) {
     const base = await supabase
       .from("site_images")
       .select(IMAGE_COLS_BASE)
@@ -47,6 +47,7 @@ export async function fetchSiteImageRows(
     ...r,
     offset_x: clampOffset(r.offset_x),
     offset_y: clampOffset(r.offset_y),
+    zoom: clampZoom(r.zoom),
   }));
 }
 
