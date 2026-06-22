@@ -170,8 +170,8 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
             </button>
           </div>
           <p className="mt-0.5 text-xs text-zinc-500">
-            Slide to move (max {MAX_IMAGE_OFFSET}px each way) or zoom the photo
-            within its frame.
+            Slide to reframe or zoom the photo. The preview matches the live
+            site.
           </p>
 
           <div className="mt-3 grid gap-4 sm:grid-cols-[1fr_auto]">
@@ -180,7 +180,8 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
                 <div className="flex items-center justify-between text-xs text-zinc-500">
                   <span>← Left</span>
                   <span className="font-mono text-zinc-700">
-                    {offsetX > 0 ? `+${offsetX}` : offsetX}px
+                    {offsetX > 0 ? "+" : ""}
+                    {Math.round(offsetX / 2)}%
                   </span>
                   <span>Right →</span>
                 </div>
@@ -199,7 +200,8 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
                 <div className="flex items-center justify-between text-xs text-zinc-500">
                   <span>↑ Up</span>
                   <span className="font-mono text-zinc-700">
-                    {offsetY > 0 ? `+${offsetY}` : offsetY}px
+                    {offsetY > 0 ? "+" : ""}
+                    {Math.round(offsetY / 2)}%
                   </span>
                   <span>Down ↓</span>
                 </div>

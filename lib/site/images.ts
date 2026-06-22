@@ -34,10 +34,15 @@ export function clampZoom(value: number | null | undefined): number {
 
 /**
  * Final CSS object-position for an image, composing an optional base position
- * (e.g. a section's "50% 20%") with the image's own pixel framing offsets.
- * Positive offsetX moves the photo right; positive offsetY moves it down.
- * Returns undefined when there is nothing to set (centered, no offset) so the
- * browser default stands.
+ * (e.g. a section's "50% 20%") with the image's own framing offsets.
+ *
+ * The offset is PROPORTIONAL, not pixel-based: the stored value (-100..100) is
+ * a percentage of the frame, halved so the full slider sweeps edge-to-edge
+ * (+/-100 -> +/-50 percentage points around the 50% center). Proportional
+ * framing is size-independent, so the small editor preview and the full-size
+ * live image reframe by the same relative amount. Positive offsetX moves the
+ * photo right; positive offsetY moves it down. Returns undefined when there is
+ * nothing to set (centered) so the browser default stands.
  */
 export function imageObjectPosition(
   base: string | undefined,
@@ -53,7 +58,7 @@ export function imageObjectPosition(
   // object-fit: cover slides the source the opposite way, so subtract to make
   // a positive offset move the visible photo in the intuitive direction.
   const nudge = (b: string, o: number) =>
-    o === 0 ? b : `calc(${b} ${o < 0 ? "+" : "-"} ${Math.abs(o)}px)`;
+    o === 0 ? b : `calc(${b} ${o < 0 ? "+" : "-"} ${Math.abs(o) / 2}%)`;
   return `${nudge(baseX, ox)} ${nudge(baseY, oy)}`;
 }
 
