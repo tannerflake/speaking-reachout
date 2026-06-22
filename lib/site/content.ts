@@ -90,8 +90,9 @@ async function fetchSiteContent(): Promise<SiteContent> {
     engagements: rowsFor(rows, "engagement").map(
       (r) => r.data as EngagementData,
     ),
-    featuredVideo:
-      rowsFor(rows, "featured_video")[0]?.data as FeaturedVideoData | null,
+    featuredVideos: rowsFor(rows, "featured_video").map(
+      (r) => r.data as FeaturedVideoData,
+    ),
     mediaItems: rowsFor(rows, "media_item").map((r) => r.data as MediaItemData),
     testimonials: rowsFor(rows, "testimonial").map(
       (r) => r.data as TestimonialData,

@@ -12,9 +12,6 @@ export function SpeakingSection({
   audienceTypes: string[];
   engagements: EngagementData[];
 }) {
-  const recent = engagements.filter((e) => e.kind !== "upcoming");
-  const upcoming = engagements.filter((e) => e.kind === "upcoming");
-
   return (
     <section
       id="speaking"
@@ -59,43 +56,23 @@ export function SpeakingSection({
         )}
 
         {/* Engagements */}
-        {(recent.length > 0 || upcoming.length > 0) && (
-          <div className="mt-16 grid gap-10 sm:grid-cols-2">
-            {recent.length > 0 && (
-              <Reveal>
-                <h3 className="mb-4 text-sm font-semibold uppercase tracking-widest text-slate">
-                  Recent engagements
-                </h3>
-                <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {recent.map((e) => (
-                    <li
-                      key={e.name}
-                      className="border border-rule bg-panel px-4 py-3 text-sm text-graphite"
-                    >
-                      {e.name}
-                    </li>
-                  ))}
-                </ul>
-              </Reveal>
-            )}
-            {upcoming.length > 0 && (
-              <Reveal delay={0.1}>
-                <h3 className="mb-4 text-sm font-semibold uppercase tracking-widest text-slate">
-                  Upcoming
-                </h3>
-                <ul className="space-y-2">
-                  {upcoming.map((e) => (
-                    <li
-                      key={e.name}
-                      className="flex items-center gap-3 border border-brass/40 bg-brass/[0.06] px-4 py-3 text-sm text-graphite"
-                    >
-                      <span className="h-1.5 w-1.5 rounded-full bg-brass" />
-                      {e.name}
-                    </li>
-                  ))}
-                </ul>
-              </Reveal>
-            )}
+        {engagements.length > 0 && (
+          <div className="mt-16">
+            <Reveal>
+              <h3 className="mb-4 text-sm font-semibold uppercase tracking-widest text-slate">
+                Recent &amp; upcoming engagements
+              </h3>
+              <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {engagements.map((e) => (
+                  <li
+                    key={e.name}
+                    className="border border-rule bg-panel px-4 py-3 text-sm text-graphite"
+                  >
+                    {e.name}
+                  </li>
+                ))}
+              </ul>
+            </Reveal>
           </div>
         )}
 

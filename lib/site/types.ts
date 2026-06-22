@@ -74,6 +74,8 @@ export interface StoryData {
   gallery?: string[];
   /** Optional embedded video (YouTube) for a richer chapter. */
   video_url?: string;
+  /** Optional video that plays in a modal from a play button on the photo. */
+  modal_video_url?: string;
   /** CSS object-position for the main photo (e.g. "50% 20%") to reframe a crop. */
   image_position?: string;
   /** CSS aspect-ratio for the main photo (e.g. "5/4") to widen/narrow the crop. */
@@ -132,7 +134,7 @@ export interface SiteContent {
   topics: TopicData[];
   audienceTypes: string[];
   engagements: EngagementData[];
-  featuredVideo: FeaturedVideoData | null;
+  featuredVideos: FeaturedVideoData[];
   mediaItems: MediaItemData[];
   testimonials: TestimonialData[];
   book: BookData;

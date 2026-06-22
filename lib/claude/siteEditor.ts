@@ -32,7 +32,7 @@ export interface PreviewItem {
 // before it can reach the store.
 const ALLOWED_DATA_KEYS: Record<SectionKey, string[]> = {
   hero: ["kicker", "headline", "subhead", "cta_label", "image_key"],
-  story: ["title", "body", "image_key", "stats", "tone", "gallery", "video_url", "image_position", "image_aspect"],
+  story: ["title", "body", "image_key", "stats", "tone", "gallery", "video_url", "modal_video_url", "image_position", "image_aspect"],
   quirk: ["label"],
   topic: ["title", "body"],
   audience_type: ["label"],
@@ -56,12 +56,12 @@ The content store is a list of records. Each record has: id, section_key, sort_o
 
 Editable section_key values and their data fields:
 - hero (one record): kicker, headline, subhead, cta_label, image_key
-- story (ordered beats): title, body, image_key, stats (array of {value, label}), tone ("warm" or "default")
+- story (ordered beats): title, body, image_key, stats (array of {value, label}), tone ("warm" or "default"), video_url (inline embed), modal_video_url (play button on the photo that opens a modal)
 - quirk (ordered chips): label
 - topic (ordered, click-to-expand): title, body
 - audience_type (ordered chips): label
 - engagement (ordered): name, kind ("recent" or "upcoming")
-- featured_video (one record): title, caption, video_url, event_url, poster_image_key
+- featured_video (one or more records, ordered): title, caption, video_url, event_url, poster_image_key
 - media_item (ordered op-eds/articles): title, outlet, url
 - testimonial (ordered): quote, attribution
 - book (one record, final CTA): headline, body, fallback_email, image_key

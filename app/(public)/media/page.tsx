@@ -28,7 +28,7 @@ export default async function MediaPage() {
           </h1>
         </div>
         <MediaSection items={c.mediaItems} />
-        <FeaturedVideo data={c.featuredVideo} images={c.images} />
+        <FeaturedVideo videos={c.featuredVideos} images={c.images} />
       </main>
       <PublicFooter signature={signature} email={c.book.fallback_email} />
     </>

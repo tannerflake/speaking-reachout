@@ -1,4 +1,5 @@
 import { SiteImage } from "@/components/public/SiteImage";
+import { StoryVideoImage } from "@/components/public/StoryVideoImage";
 import { Reveal } from "@/components/public/Reveal";
 import { VideoEmbed } from "@/components/public/VideoEmbed";
 import { imagePublicUrl } from "@/lib/site/images";
@@ -48,15 +49,29 @@ export function StorySection({
                     direction={flip ? "left" : "right"}
                     className={flip ? "sm:order-2" : ""}
                   >
-                    <SiteImage
-                      image={images[imageKey]}
-                      imageKey={imageKey}
-                      aspect="aspect-[4/5]"
-                      aspectRatio={beat.image_aspect}
-                      className={`border ${warm ? "border-brass/40" : "border-rule"}`}
-                      objectPosition={beat.image_position}
-                      sizes="(max-width: 640px) 100vw, 50vw"
-                    />
+                    {beat.modal_video_url ? (
+                      <StoryVideoImage
+                        image={images[imageKey]}
+                        imageKey={imageKey}
+                        videoUrl={beat.modal_video_url}
+                        title={beat.title}
+                        aspect="aspect-[4/5]"
+                        aspectRatio={beat.image_aspect}
+                        className={`border ${warm ? "border-brass/40" : "border-rule"}`}
+                        objectPosition={beat.image_position}
+                        sizes="(max-width: 640px) 100vw, 50vw"
+                      />
+                    ) : (
+                      <SiteImage
+                        image={images[imageKey]}
+                        imageKey={imageKey}
+                        aspect="aspect-[4/5]"
+                        aspectRatio={beat.image_aspect}
+                        className={`border ${warm ? "border-brass/40" : "border-rule"}`}
+                        objectPosition={beat.image_position}
+                        sizes="(max-width: 640px) 100vw, 50vw"
+                      />
+                    )}
                   </Reveal>
 
                   <Reveal direction={flip ? "right" : "left"} delay={0.1}>

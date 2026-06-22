@@ -129,7 +129,7 @@ insert into site_content (id, section_key, sort_order, data) values
   ('70000000-0000-4000-8000-000000000001', 'featured_video', 0, jsonb_build_object(
     'title',     'Watch Jeff in Action',
     'caption',   'See how he holds a room. A conversation with Mark Cuban at ASU''s Institute of Politics.',
-    'video_url', '',
+    'video_url', 'https://youtu.be/F2UZvdhcq8c',
     'event_url', 'https://asuevents.asu.edu/event/dialogues-democracy-mark-cuban-hosted-ambassador-jeff-flake',
     'poster_image_key', 'media_cuban_poster'
   ))

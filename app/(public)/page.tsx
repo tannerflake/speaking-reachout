@@ -32,7 +32,7 @@ export default async function HomePage() {
           audienceTypes={c.audienceTypes}
           engagements={c.engagements}
         />
-        <FeaturedVideo data={c.featuredVideo} images={c.images} />
+        <FeaturedVideo videos={c.featuredVideos} images={c.images} />
         <MediaSection items={c.mediaItems} />
         <Testimonials items={c.testimonials} images={c.images} />
         <BookSection data={c.book} images={c.images} />
