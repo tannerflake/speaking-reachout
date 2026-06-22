@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createPublicClient } from "@/lib/supabase/public";
 import { clampOffset, clampZoom } from "@/lib/site/images";
 import type {
+  AuthoredBookData,
   BookData,
   EngagementData,
   FeaturedVideoData,
@@ -97,6 +98,8 @@ async function fetchSiteContent(): Promise<SiteContent> {
     testimonials: rowsFor(rows, "testimonial").map(
       (r) => r.data as TestimonialData,
     ),
+    authoredBook:
+      (rowsFor(rows, "authored_book")[0]?.data as AuthoredBookData) ?? null,
     book: firstData<BookData>(rows, "book", {}),
     images: imageMap,
   };

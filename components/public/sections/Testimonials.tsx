@@ -14,7 +14,7 @@ export function Testimonials({
   return (
     <section
       id="testimonials"
-      className="scroll-mt-20 bg-paper py-20 sm:py-28"
+      className="scroll-mt-20 border-t border-rule bg-paper-2 py-20 sm:py-28"
     >
       <div className="mx-auto max-w-6xl px-5 sm:px-8">
         <Reveal>

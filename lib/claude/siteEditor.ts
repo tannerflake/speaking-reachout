@@ -44,8 +44,21 @@ const ALLOWED_DATA_KEYS: Record<SectionKey, string[]> = {
     "event_url",
     "poster_image_key",
   ],
-  media_item: ["title", "outlet", "url"],
+  media_item: ["title", "outlet", "url", "image_key"],
   testimonial: ["quote", "attribution", "image_key"],
+  authored_book: [
+    "eyebrow",
+    "badge",
+    "title",
+    "subtitle",
+    "body",
+    "quote",
+    "quote_attribution",
+    "url",
+    "cta_label",
+    "meta",
+    "image_key",
+  ],
   book: ["headline", "body", "fallback_email", "image_key", "image_position"],
 };
 
@@ -62,8 +75,9 @@ Editable section_key values and their data fields:
 - audience_type (ordered chips): label
 - engagement (ordered): name, kind ("recent" or "upcoming")
 - featured_video (one or more records, ordered): title, caption, video_url, event_url, poster_image_key
-- media_item (ordered op-eds/articles): title, outlet, url
+- media_item (ordered op-eds/articles): title, outlet, url, image_key (outlet logo shown faintly behind the card)
 - testimonial (ordered): quote, attribution
+- authored_book (one record, his published book): eyebrow, badge, title, subtitle, body, quote, quote_attribution, url, cta_label, meta, image_key
 - book (one record, final CTA): headline, body, fallback_email, image_key
 
 Return ONLY a JSON object, no prose, no markdown fences, shaped exactly:

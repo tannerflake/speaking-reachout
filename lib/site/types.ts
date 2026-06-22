@@ -12,6 +12,7 @@ export type SectionKey =
   | "featured_video"
   | "media_item"
   | "testimonial"
+  | "authored_book"
   | "book";
 
 /** Section keys the AI editor is allowed to create/update/reorder/delete. */
@@ -25,6 +26,7 @@ export const EDITABLE_SECTION_KEYS: SectionKey[] = [
   "featured_video",
   "media_item",
   "testimonial",
+  "authored_book",
   "book",
 ];
 
@@ -104,12 +106,34 @@ export interface MediaItemData {
   title?: string;
   outlet?: string;
   url?: string;
+  /** Optional outlet logo/photo shown faintly behind the card (e.g. "washington_post"). */
+  image_key?: string;
 }
 
 export interface TestimonialData {
   quote?: string;
   attribution?: string;
   /** Optional logo/image shown faintly behind the card (e.g. a school crest). */
+  image_key?: string;
+}
+
+export interface AuthoredBookData {
+  /** Small label above the title, e.g. "The Book". */
+  eyebrow?: string;
+  /** A short badge line, e.g. "New York Times Bestseller". */
+  badge?: string;
+  title?: string;
+  subtitle?: string;
+  /** Short description / blurb. */
+  body?: string;
+  /** Optional pull quote about the book. */
+  quote?: string;
+  quote_attribution?: string;
+  /** Outbound link (e.g. the Amazon page). */
+  url?: string;
+  cta_label?: string;
+  /** Small print: publisher, length, format. */
+  meta?: string;
   image_key?: string;
 }
 
@@ -137,6 +161,7 @@ export interface SiteContent {
   featuredVideos: FeaturedVideoData[];
   mediaItems: MediaItemData[];
   testimonials: TestimonialData[];
+  authoredBook: AuthoredBookData | null;
   book: BookData;
   images: Record<string, SiteImageRow>;
 }

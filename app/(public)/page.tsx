@@ -8,6 +8,7 @@ import { QuirksStrip } from "@/components/public/sections/QuirksStrip";
 import { SpeakingSection } from "@/components/public/sections/SpeakingSection";
 import { FeaturedVideo } from "@/components/public/sections/FeaturedVideo";
 import { MediaSection } from "@/components/public/sections/MediaSection";
+import { AuthoredBookSection } from "@/components/public/sections/AuthoredBookSection";
 import { Testimonials } from "@/components/public/sections/Testimonials";
 import { BookSection } from "@/components/public/sections/BookSection";
 
@@ -33,7 +34,8 @@ export default async function HomePage() {
           engagements={c.engagements}
         />
         <FeaturedVideo videos={c.featuredVideos} images={c.images} />
-        <MediaSection items={c.mediaItems} />
+        <MediaSection items={c.mediaItems} images={c.images} />
+        <AuthoredBookSection data={c.authoredBook} images={c.images} />
         <Testimonials items={c.testimonials} images={c.images} />
         <BookSection data={c.book} images={c.images} />
       </main>
