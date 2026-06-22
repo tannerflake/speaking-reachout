@@ -6,6 +6,7 @@ export type SectionKey =
   | "hero"
   | "story"
   | "quirk"
+  | "speaking"
   | "topic"
   | "audience_type"
   | "engagement"
@@ -20,6 +21,7 @@ export const EDITABLE_SECTION_KEYS: SectionKey[] = [
   "hero",
   "story",
   "quirk",
+  "speaking",
   "topic",
   "audience_type",
   "engagement",
@@ -82,6 +84,15 @@ export interface StoryData {
   image_position?: string;
   /** CSS aspect-ratio for the main photo (e.g. "5/4") to widen/narrow the crop. */
   image_aspect?: string;
+}
+
+export interface SpeakingData {
+  eyebrow?: string;
+  heading?: string;
+  topics_label?: string;
+  audiences_label?: string;
+  engagements_label?: string;
+  cta_label?: string;
 }
 
 export interface TopicData {
@@ -155,6 +166,7 @@ export interface SiteContent {
   hero: HeroData;
   story: StoryData[];
   quirks: string[];
+  speaking: SpeakingData;
   topics: TopicData[];
   audienceTypes: string[];
   engagements: EngagementData[];

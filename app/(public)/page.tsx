@@ -29,6 +29,7 @@ export default async function HomePage() {
         <StorySection story={c.story} images={c.images} />
         <QuirksStrip quirks={c.quirks} />
         <SpeakingSection
+          data={c.speaking}
           topics={c.topics}
           audienceTypes={c.audienceTypes}
           engagements={c.engagements}

@@ -34,6 +34,14 @@ const ALLOWED_DATA_KEYS: Record<SectionKey, string[]> = {
   hero: ["kicker", "headline", "subhead", "cta_label", "image_key"],
   story: ["title", "body", "image_key", "stats", "tone", "gallery", "video_url", "modal_video_url", "image_position", "image_aspect"],
   quirk: ["label"],
+  speaking: [
+    "eyebrow",
+    "heading",
+    "topics_label",
+    "audiences_label",
+    "engagements_label",
+    "cta_label",
+  ],
   topic: ["title", "body"],
   audience_type: ["label"],
   engagement: ["name", "kind"],
@@ -71,6 +79,7 @@ Editable section_key values and their data fields:
 - hero (one record): kicker, headline, subhead, cta_label, image_key
 - story (ordered beats): title, body, image_key, stats (array of {value, label}), tone ("warm" or "default"), video_url (inline embed), modal_video_url (play button on the photo that opens a modal)
 - quirk (ordered chips): label
+- speaking (one record, the Speaking section header/labels): eyebrow, heading, topics_label, audiences_label, engagements_label, cta_label
 - topic (ordered, click-to-expand): title, body
 - audience_type (ordered chips): label
 - engagement (ordered): name, kind ("recent" or "upcoming")

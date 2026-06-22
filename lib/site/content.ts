@@ -12,6 +12,7 @@ import type {
   SiteContent,
   SiteContentRow,
   SiteImageRow,
+  SpeakingData,
   StoryData,
   TestimonialData,
   TopicData,
@@ -86,6 +87,7 @@ async function fetchSiteContent(): Promise<SiteContent> {
     hero: firstData<HeroData>(rows, "hero", {}),
     story: rowsFor(rows, "story").map((r) => r.data as StoryData),
     quirks: labels(rows, "quirk"),
+    speaking: firstData<SpeakingData>(rows, "speaking", {}),
     topics: rowsFor(rows, "topic").map((r) => r.data as TopicData),
     audienceTypes: labels(rows, "audience_type"),
     engagements: rowsFor(rows, "engagement").map(

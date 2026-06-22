@@ -1,13 +1,19 @@
 import Link from "next/link";
 import { Reveal } from "@/components/public/Reveal";
 import { TopicAccordion } from "@/components/public/TopicAccordion";
-import type { EngagementData, TopicData } from "@/lib/site/types";
+import type {
+  EngagementData,
+  SpeakingData,
+  TopicData,
+} from "@/lib/site/types";
 
 export function SpeakingSection({
+  data,
   topics,
   audienceTypes,
   engagements,
 }: {
+  data: SpeakingData;
   topics: TopicData[];
   audienceTypes: string[];
   engagements: EngagementData[];
@@ -19,9 +25,9 @@ export function SpeakingSection({
     >
       <div className="mx-auto max-w-6xl px-5 sm:px-8">
         <Reveal>
-          <p className="eyebrow">Speaking</p>
+          <p className="eyebrow">{data.eyebrow ?? "Speaking"}</p>
           <h2 className="mt-4 max-w-2xl font-display text-4xl font-medium leading-tight text-oxford sm:text-5xl">
-            A voice that challenges without polarizing.
+            {data.heading ?? "A voice that challenges without polarizing."}
           </h2>
         </Reveal>
 
@@ -29,7 +35,7 @@ export function SpeakingSection({
         {topics.length > 0 && (
           <div className="mt-12">
             <h3 className="mb-4 text-sm font-semibold uppercase tracking-widest text-slate">
-              Popular topics
+              {data.topics_label ?? "Popular topics"}
             </h3>
             <Reveal>
               <TopicAccordion topics={topics} />
@@ -41,7 +47,7 @@ export function SpeakingSection({
         {audienceTypes.length > 0 && (
           <div className="mt-16">
             <h3 className="mb-4 text-sm font-semibold uppercase tracking-widest text-slate">
-              Formats &amp; audiences
+              {data.audiences_label ?? "Formats & audiences"}
             </h3>
             <div className="flex flex-wrap gap-3">
               {audienceTypes.map((a, i) => (
@@ -60,7 +66,7 @@ export function SpeakingSection({
           <div className="mt-16">
             <Reveal>
               <h3 className="mb-4 text-sm font-semibold uppercase tracking-widest text-slate">
-                Recent &amp; upcoming engagements
+                {data.engagements_label ?? "Recent & upcoming engagements"}
               </h3>
               <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {engagements.map((e) => (
@@ -82,7 +88,7 @@ export function SpeakingSection({
               href="/#book"
               className="inline-flex items-center gap-2 rounded-md bg-oxford px-7 py-3.5 text-base font-semibold tracking-wide text-white transition-colors hover:bg-oxford-soft"
             >
-              Bring Jeff to your stage
+              {data.cta_label ?? "Bring Jeff to your stage"}
               <span aria-hidden>&rarr;</span>
             </Link>
           </div>
