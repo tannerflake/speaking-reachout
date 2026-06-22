@@ -1,19 +1,65 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { uploadSiteImage } from "@/app/actions/siteEditor";
+import {
+  imagePublicUrl,
+  imageObjectPosition,
+  clampOffset,
+  MAX_IMAGE_OFFSET,
+} from "@/lib/site/images";
 import type { SiteImageRow } from "@/lib/site/types";
 
 /**
  * Human-assigned image uploads. The AI editor can reference an existing
  * image_key, but only a person uploads the actual asset and assigns the key.
+ * The position sliders nudge the photo within its crop (+/- 100px each axis);
+ * the live preview reframes with the exact CSS used on the public site.
  */
 export function ImageUploader({ images }: { images: SiteImageRow[] }) {
   const [error, setError] = useState<string | null>(null);
   const [okKey, setOkKey] = useState<string | null>(null);
+  const [imageKey, setImageKey] = useState("");
+  const [fileUrl, setFileUrl] = useState<string | null>(null);
+  const [offsetX, setOffsetX] = useState(0);
+  const [offsetY, setOffsetY] = useState(0);
   const [pending, start] = useTransition();
+  const formRef = useRef<HTMLFormElement>(null);
   const router = useRouter();
+
+  // Release the object URL when the chosen file changes or on unmount.
+  useEffect(() => {
+    return () => {
+      if (fileUrl) URL.revokeObjectURL(fileUrl);
+    };
+  }, [fileUrl]);
+
+  const existing = images.find((img) => img.image_key === imageKey.trim());
+  const previewUrl = fileUrl ?? imagePublicUrl(existing);
+  const previewPosition = imageObjectPosition(undefined, offsetX, offsetY);
+  const centered = offsetX === 0 && offsetY === 0;
+
+  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setFileUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      const file = e.target.files?.[0];
+      return file ? URL.createObjectURL(file) : null;
+    });
+  }
+
+  function onKeyChange(value: string) {
+    setImageKey(value);
+    // Pre-fill the sliders from a known key so re-uploads start where the
+    // photo currently sits (only when no new file is staged for preview).
+    if (!fileUrl) {
+      const match = images.find((img) => img.image_key === value.trim());
+      if (match) {
+        setOffsetX(clampOffset(match.offset_x));
+        setOffsetY(clampOffset(match.offset_y));
+      }
+    }
+  }
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -21,6 +67,8 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
     setOkKey(null);
     const form = e.currentTarget;
     const fd = new FormData(form);
+    fd.set("offset_x", String(offsetX));
+    fd.set("offset_y", String(offsetY));
     start(async () => {
       const res = await uploadSiteImage(fd);
       if (!res.ok) {
@@ -29,6 +77,13 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
       }
       setOkKey(res.image_key ?? null);
       form.reset();
+      setImageKey("");
+      setOffsetX(0);
+      setOffsetY(0);
+      setFileUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
       router.refresh();
     });
   }
@@ -44,7 +99,7 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
         key replaces that image across the site.
       </p>
 
-      <form onSubmit={onSubmit} className="mt-4 space-y-3">
+      <form ref={formRef} onSubmit={onSubmit} className="mt-4 space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label className="block text-sm font-medium text-zinc-700">
@@ -53,6 +108,8 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
             <input
               name="image_key"
               required
+              value={imageKey}
+              onChange={(e) => onKeyChange(e.target.value)}
               placeholder="hero_primary"
               list="image-keys"
               className={field}
@@ -72,6 +129,7 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
               type="file"
               accept="image/*"
               required
+              onChange={onFileChange}
               className="mt-1 w-full text-sm text-zinc-600 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-100 file:px-3 file:py-1.5 file:text-sm file:font-medium"
             />
           </div>
@@ -82,6 +140,98 @@ export function ImageUploader({ images }: { images: SiteImageRow[] }) {
           </label>
           <input name="alt_text" className={field} />
         </div>
+
+        {/* Framing — nudge the photo within its crop, +/- 100px per axis. */}
+        <div className="rounded-md border border-zinc-200 bg-zinc-50 p-4">
+          <div className="flex items-center justify-between">
+            <label className="block text-sm font-medium text-zinc-700">
+              Position
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                setOffsetX(0);
+                setOffsetY(0);
+              }}
+              disabled={centered}
+              className="text-xs font-medium text-blue-600 hover:text-blue-700 disabled:text-zinc-400"
+            >
+              Center
+            </button>
+          </div>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            Slide to move the photo within its frame (max {MAX_IMAGE_OFFSET}px
+            each way).
+          </p>
+
+          <div className="mt-3 grid gap-4 sm:grid-cols-[1fr_auto]">
+            <div className="space-y-3">
+              <div>
+                <div className="flex items-center justify-between text-xs text-zinc-500">
+                  <span>← Left</span>
+                  <span className="font-mono text-zinc-700">
+                    {offsetX > 0 ? `+${offsetX}` : offsetX}px
+                  </span>
+                  <span>Right →</span>
+                </div>
+                <input
+                  type="range"
+                  min={-MAX_IMAGE_OFFSET}
+                  max={MAX_IMAGE_OFFSET}
+                  step={1}
+                  value={offsetX}
+                  onChange={(e) => setOffsetX(Number(e.target.value))}
+                  className="mt-1 w-full accent-blue-600"
+                  aria-label="Horizontal position"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between text-xs text-zinc-500">
+                  <span>↑ Up</span>
+                  <span className="font-mono text-zinc-700">
+                    {offsetY > 0 ? `+${offsetY}` : offsetY}px
+                  </span>
+                  <span>Down ↓</span>
+                </div>
+                <input
+                  type="range"
+                  min={-MAX_IMAGE_OFFSET}
+                  max={MAX_IMAGE_OFFSET}
+                  step={1}
+                  value={offsetY}
+                  onChange={(e) => setOffsetY(Number(e.target.value))}
+                  className="mt-1 w-full accent-blue-600"
+                  aria-label="Vertical position"
+                />
+              </div>
+            </div>
+
+            {/* Live preview using the exact object-position the site applies. */}
+            <div className="relative h-32 w-full overflow-hidden rounded-md border border-zinc-300 bg-zinc-100 sm:w-44">
+              {previewUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={previewUrl}
+                  alt="Position preview"
+                  className="h-full w-full object-cover"
+                  style={
+                    previewPosition
+                      ? { objectPosition: previewPosition }
+                      : undefined
+                  }
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center px-2 text-center text-xs text-zinc-400">
+                  Choose a file or key to preview
+                </div>
+              )}
+              {/* Faint center guides so the nudge is easy to judge. */}
+              <div className="pointer-events-none absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-white/40" />
+              <div className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-white/40" />
+            </div>
+          </div>
+        </div>
+
         {error && <p className="text-sm text-rose-600">{error}</p>}
         {okKey && (
           <p className="text-sm text-emerald-700">

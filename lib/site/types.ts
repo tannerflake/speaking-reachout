@@ -41,6 +41,10 @@ export interface SiteImageRow {
   storage_path: string | null;
   alt_text: string | null;
   subject: string | null;
+  /** Horizontal framing nudge in px (-100..100). Positive moves the photo right. */
+  offset_x?: number | null;
+  /** Vertical framing nudge in px (-100..100). Positive moves the photo down. */
+  offset_y?: number | null;
 }
 
 // ---- Typed views of each section's `data` payload -------------------------

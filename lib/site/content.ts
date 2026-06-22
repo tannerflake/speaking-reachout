@@ -1,4 +1,6 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createPublicClient } from "@/lib/supabase/public";
+import { clampOffset } from "@/lib/site/images";
 import type {
   BookData,
   EngagementData,
@@ -16,6 +18,36 @@ import type {
 
 function bySort(a: SiteContentRow, b: SiteContentRow): number {
   return a.sort_order - b.sort_order;
+}
+
+const IMAGE_COLS_BASE = "image_key, storage_path, alt_text, subject";
+
+/**
+ * Read all site_images rows with framing offsets normalized to numbers. Falls
+ * back to the base columns if the offset_x/offset_y migration (0005) has not
+ * been applied yet, so image rendering never breaks on a pending migration.
+ */
+export async function fetchSiteImageRows(
+  supabase: SupabaseClient,
+): Promise<SiteImageRow[]> {
+  const withOffsets = await supabase
+    .from("site_images")
+    .select(`${IMAGE_COLS_BASE}, offset_x, offset_y`)
+    .order("image_key");
+  let data = withOffsets.data as SiteImageRow[] | null;
+  if (withOffsets.error) {
+    const base = await supabase
+      .from("site_images")
+      .select(IMAGE_COLS_BASE)
+      .order("image_key");
+    data = base.data as SiteImageRow[] | null;
+  }
+  const rows = data ?? [];
+  return rows.map((r) => ({
+    ...r,
+    offset_x: clampOffset(r.offset_x),
+    offset_y: clampOffset(r.offset_y),
+  }));
 }
 
 function rowsFor(rows: SiteContentRow[], key: string): SiteContentRow[] {
@@ -36,18 +68,15 @@ function labels(rows: SiteContentRow[], key: string): string[] {
 async function fetchSiteContent(): Promise<SiteContent> {
   const supabase = createPublicClient();
 
-  const [{ data: content }, { data: images }] = await Promise.all([
+  const [{ data: content }, imageRows] = await Promise.all([
     supabase
       .from("site_content")
       .select("id, section_key, sort_order, data, is_published")
       .eq("is_published", true),
-    supabase
-      .from("site_images")
-      .select("image_key, storage_path, alt_text, subject"),
+    fetchSiteImageRows(supabase),
   ]);
 
   const rows = (content as SiteContentRow[]) ?? [];
-  const imageRows = (images as SiteImageRow[]) ?? [];
   const imageMap: Record<string, SiteImageRow> = {};
   for (const img of imageRows) imageMap[img.image_key] = img;
 

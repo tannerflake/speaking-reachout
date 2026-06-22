@@ -1,16 +1,12 @@
 import { createPublicClient } from "@/lib/supabase/public";
 import { SiteEditor } from "@/components/SiteEditor";
-import type { SiteImageRow } from "@/lib/site/types";
+import { fetchSiteImageRows } from "@/lib/site/content";
 
 export const dynamic = "force-dynamic";
 
 export default async function SiteEditorPage() {
   const supabase = createPublicClient();
-  const { data } = await supabase
-    .from("site_images")
-    .select("image_key, storage_path, alt_text, subject")
-    .order("image_key");
-  const images = (data as SiteImageRow[]) ?? [];
+  const images = await fetchSiteImageRows(supabase);
 
   return (
     <div className="mx-auto max-w-3xl space-y-8">

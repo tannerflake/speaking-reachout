@@ -13,6 +13,7 @@ import {
 } from "@/lib/claude/siteEditor";
 import { EDITABLE_SECTION_KEYS } from "@/lib/site/types";
 import { hasEmDash } from "@/lib/site/sanitize";
+import { clampOffset } from "@/lib/site/images";
 
 const SITE_IMAGES_BUCKET = "site-images";
 
@@ -170,6 +171,8 @@ export async function uploadSiteImage(formData: FormData): Promise<UploadResult>
   const imageKey = String(formData.get("image_key") ?? "").trim();
   const altText = String(formData.get("alt_text") ?? "").trim();
   const subject = String(formData.get("subject") ?? "").trim();
+  const offsetX = clampOffset(Number(formData.get("offset_x")));
+  const offsetY = clampOffset(Number(formData.get("offset_y")));
 
   if (!(file instanceof File) || file.size === 0) {
     return { ok: false, error: "Choose an image file." };
@@ -200,15 +203,27 @@ export async function uploadSiteImage(formData: FormData): Promise<UploadResult>
     return { ok: false, error: `Upload failed: ${uploadError.message}` };
   }
 
-  const { error: rowError } = await admin.from("site_images").upsert(
-    {
-      image_key: imageKey,
-      storage_path: path,
-      alt_text: altText || imageKey,
-      subject: subject || null,
-    },
-    { onConflict: "image_key" },
-  );
+  const baseRow = {
+    image_key: imageKey,
+    storage_path: path,
+    alt_text: altText || imageKey,
+    subject: subject || null,
+  };
+
+  let { error: rowError } = await admin
+    .from("site_images")
+    .upsert(
+      { ...baseRow, offset_x: offsetX, offset_y: offsetY },
+      { onConflict: "image_key" },
+    );
+  // The offset_x/offset_y columns ship in migration 0005. If it has not been
+  // applied yet, retry without them so the upload still succeeds (the nudge
+  // simply won't persist until the migration runs).
+  if (rowError) {
+    ({ error: rowError } = await admin
+      .from("site_images")
+      .upsert(baseRow, { onConflict: "image_key" }));
+  }
   if (rowError) {
     return { ok: false, error: `Could not register image: ${rowError.message}` };
   }
