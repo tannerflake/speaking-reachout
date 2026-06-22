@@ -44,7 +44,7 @@ const ALLOWED_DATA_KEYS: Record<SectionKey, string[]> = {
   ],
   topic: ["title", "body"],
   audience_type: ["label"],
-  engagement: ["name", "kind"],
+  engagement: ["name", "kind", "image_key"],
   featured_video: [
     "title",
     "caption",
@@ -82,7 +82,7 @@ Editable section_key values and their data fields:
 - speaking (one record, the Speaking section header/labels): eyebrow, heading, topics_label, audiences_label, engagements_label, cta_label
 - topic (ordered, click-to-expand): title, body
 - audience_type (ordered chips): label
-- engagement (ordered): name, kind ("recent" or "upcoming")
+- engagement (ordered): name, kind ("recent" or "upcoming"), image_key (institution logo shown faintly behind the card; defaults to a slug of the name)
 - featured_video (one or more records, ordered): title, caption, video_url, event_url, poster_image_key
 - media_item (ordered op-eds/articles): title, outlet, url, image_key (outlet logo shown faintly behind the card)
 - testimonial (ordered): quote, attribution

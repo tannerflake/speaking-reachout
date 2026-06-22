@@ -103,6 +103,12 @@ export interface TopicData {
 export interface EngagementData {
   name?: string;
   kind?: "recent" | "upcoming";
+  /**
+   * Optional logo shown faintly behind the card. Defaults to a slug of the name
+   * (e.g. "Rutgers University" -> "rutgers_university") so any engagement gets a
+   * logo slot automatically; set this to override that derived key.
+   */
+  image_key?: string;
 }
 
 export interface FeaturedVideoData {

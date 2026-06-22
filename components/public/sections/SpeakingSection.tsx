@@ -1,22 +1,38 @@
 import Link from "next/link";
 import { Reveal } from "@/components/public/Reveal";
 import { TopicAccordion } from "@/components/public/TopicAccordion";
+import { imagePublicUrl } from "@/lib/site/images";
 import type {
   EngagementData,
+  SiteImageRow,
   SpeakingData,
   TopicData,
 } from "@/lib/site/types";
+
+/** Image key for an engagement: an explicit override, else a slug of the name
+ * (e.g. "Rutgers University" -> "rutgers_university"). Kept in sync with the
+ * seeded image slots so an uploaded logo lands on the matching card. */
+function engagementImageKey(e: EngagementData): string {
+  if (e.image_key) return e.image_key;
+  return (e.name ?? "")
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
 
 export function SpeakingSection({
   data,
   topics,
   audienceTypes,
   engagements,
+  images,
 }: {
   data: SpeakingData;
   topics: TopicData[];
   audienceTypes: string[];
   engagements: EngagementData[];
+  images: Record<string, SiteImageRow>;
 }) {
   return (
     <section
@@ -69,14 +85,32 @@ export function SpeakingSection({
                 {data.engagements_label ?? "Recent & upcoming engagements"}
               </h3>
               <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {engagements.map((e) => (
-                  <li
-                    key={e.name}
-                    className="border border-rule bg-panel px-4 py-3 text-sm text-graphite"
-                  >
-                    {e.name}
-                  </li>
-                ))}
+                {engagements.map((e) => {
+                  const logoUrl = imagePublicUrl(images[engagementImageKey(e)]);
+                  return (
+                    <li
+                      key={e.name}
+                      className="group relative flex min-h-[3.5rem] items-center overflow-hidden border border-rule bg-panel px-4 py-3 text-sm text-graphite"
+                    >
+                      {logoUrl && (
+                        <>
+                          {/* Faint institution logo, bottom-right. Decorative. */}
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={logoUrl}
+                            alt=""
+                            aria-hidden
+                            className="pointer-events-none absolute -bottom-3 -right-3 h-14 w-auto max-w-[45%] object-contain object-right-bottom opacity-[0.09] transition-opacity duration-500 group-hover:opacity-[0.16]"
+                          />
+                          {/* Stylized sheen toward the logo corner. */}
+                          <div className="pointer-events-none absolute inset-0 bg-gradient-to-tl from-oxford/[0.06] via-transparent to-transparent" />
+                          <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-brass/[0.05] via-transparent to-transparent" />
+                        </>
+                      )}
+                      <span className="relative z-10">{e.name}</span>
+                    </li>
+                  );
+                })}
               </ul>
             </Reveal>
           </div>
