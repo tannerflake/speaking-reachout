@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { SignatureLogo } from "@/components/public/SignatureLogo";
+import { Seal } from "@/components/public/Seal";
 import type { SiteImageRow } from "@/lib/site/types";
 
 const NAV = [
@@ -28,7 +29,12 @@ export function PublicHeader({ signature }: { signature: SiteImageRow | undefine
       }`}
     >
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-2 sm:px-8">
-        <Link href="/" aria-label="Jeff Flake home" className="shrink-0 text-white">
+        <Link
+          href="/"
+          aria-label="Jeff Flake home"
+          className="flex shrink-0 items-center gap-3 text-white"
+        >
+          <Seal size={46} />
           <SignatureLogo image={signature} height={64} />
         </Link>
         <nav className="flex items-center gap-5 sm:gap-7">

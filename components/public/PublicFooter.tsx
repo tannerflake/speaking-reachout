@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SignatureLogo } from "@/components/public/SignatureLogo";
+import { Seal } from "@/components/public/Seal";
 import type { SiteImageRow } from "@/lib/site/types";
 
 const QUICK_LINKS = [
@@ -24,7 +25,12 @@ export function PublicFooter({
       {/* Thin brass rule as a restrained ornamental cap. */}
       <div className="h-px w-full bg-brass/50" />
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-12 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-        <Link href="/" aria-label="Jeff Flake home" className="text-white">
+        <Link
+          href="/"
+          aria-label="Jeff Flake home"
+          className="flex items-center gap-3 text-white"
+        >
+          <Seal size={40} />
           <SignatureLogo image={signature} height={54} />
         </Link>
         <nav className="flex flex-wrap gap-x-7 gap-y-2">
