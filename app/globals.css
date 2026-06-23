@@ -131,3 +131,22 @@ html {
   opacity: 1;
   transform: none;
 }
+
+/* Gentle pulse on the video play button so it reads as clickable. */
+@keyframes play-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+.play-pulse {
+  animation: play-pulse 2.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .play-pulse {
+    animation: none;
+  }
+}

@@ -68,7 +68,7 @@ export function StoryVideoImage({
           aria-label={title ? `Play video: ${title}` : "Play video"}
           className="group absolute inset-0 grid place-items-center bg-oxford/0 transition-colors hover:bg-oxford/15"
         >
-          <span className="grid h-14 w-14 place-items-center rounded-full bg-white/95 shadow-lg transition-transform group-hover:scale-105">
+          <span className="play-pulse grid h-14 w-14 place-items-center rounded-full bg-white/40 shadow-lg ring-1 ring-white/40 backdrop-blur-sm transition-colors group-hover:bg-white/70">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
               <path d="M8 5v14l11-7z" fill="#15233f" />
             </svg>
