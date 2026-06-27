@@ -9,6 +9,7 @@ export type LeadStatus =
   | "interested"
   | "booked"
   | "closed"
+  | "closed_not_me"
   | "not_interested";
 
 export const LEAD_STATUSES: LeadStatus[] = [
@@ -17,6 +18,7 @@ export const LEAD_STATUSES: LeadStatus[] = [
   "interested",
   "booked",
   "closed",
+  "closed_not_me",
   "not_interested",
 ];
 

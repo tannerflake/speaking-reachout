@@ -59,6 +59,7 @@ export function statusLabel(status: LeadStatus): string {
     interested: "Interested",
     booked: "Booked",
     closed: "Closed",
+    closed_not_me: "Closed (Not Me)",
     not_interested: "Not interested",
   }[status];
 }
@@ -70,6 +71,7 @@ export function statusClasses(status: LeadStatus): string {
     interested: "bg-amber-50 text-amber-700 border-amber-200",
     booked: "bg-emerald-50 text-emerald-700 border-emerald-200",
     closed: "bg-violet-50 text-violet-700 border-violet-200",
+    closed_not_me: "bg-teal-50 text-teal-700 border-teal-200",
     not_interested: "bg-rose-50 text-rose-700 border-rose-200",
   }[status];
 }
