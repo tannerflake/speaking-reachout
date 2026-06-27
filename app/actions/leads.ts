@@ -33,6 +33,27 @@ export async function updateLeadStatus(
   revalidatePath("/admin/admin");
 }
 
+/**
+ * Permanently delete leads (and, via ON DELETE CASCADE, their contacts,
+ * outreach, bookings, and interactions). Used to clear out junk/test data.
+ * inbound_leads.crm_lead_id is set null by its FK rather than cascaded.
+ */
+export async function bulkDeleteLeads(
+  leadIds: string[],
+): Promise<{ deleted: number; error?: string }> {
+  if (leadIds.length === 0) return { deleted: 0 };
+  const supabase = await createClient();
+  const { error, count } = await supabase
+    .from("leads")
+    .delete({ count: "exact" })
+    .in("id", leadIds);
+  if (error) return { deleted: 0, error: error.message };
+
+  revalidatePath("/admin/leads");
+  revalidatePath("/admin/admin");
+  return { deleted: count ?? leadIds.length };
+}
+
 export async function addNote(leadId: string, note: string): Promise<void> {
   const trimmed = note.trim();
   if (!trimmed) return;

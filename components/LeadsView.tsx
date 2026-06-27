@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { StatusBadge, TypeBadge } from "@/components/Badge";
 import { bulkDraft } from "@/app/actions/outreach";
+import { bulkDeleteLeads } from "@/app/actions/leads";
 import { LEAD_STATUSES } from "@/lib/types";
 import type { LeadListRow } from "@/lib/data";
 import type { LeadStatus, LeadType } from "@/lib/types";
@@ -74,6 +75,28 @@ export function LeadsView({
     });
   }
 
+  function runBulkDelete() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    const ok = window.confirm(
+      `Permanently delete ${ids.length} lead${
+        ids.length === 1 ? "" : "s"
+      }? This also removes their contacts, outreach, and bookings. This cannot be undone.`,
+    );
+    if (!ok) return;
+    setMsg(null);
+    start(async () => {
+      const res = await bulkDeleteLeads(ids);
+      setMsg(
+        res.error
+          ? `Delete failed: ${res.error}`
+          : `Deleted ${res.deleted} lead${res.deleted === 1 ? "" : "s"}.`,
+      );
+      setSelected(new Set());
+      router.refresh();
+    });
+  }
+
   const selectClass =
     "rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500";
 
@@ -130,13 +153,22 @@ export function LeadsView({
       {selected.size > 0 && (
         <div className="flex items-center justify-between rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
           <span className="text-blue-800">{selected.size} selected</span>
-          <button
-            onClick={runBulkDraft}
-            disabled={pending}
-            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
-          >
-            {pending ? "Drafting…" : `Draft Outreach for ${selected.size}`}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={runBulkDelete}
+              disabled={pending}
+              className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+            >
+              Delete
+            </button>
+            <button
+              onClick={runBulkDraft}
+              disabled={pending}
+              className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+            >
+              {pending ? "Drafting…" : `Draft Outreach for ${selected.size}`}
+            </button>
+          </div>
         </div>
       )}
       {msg && (
