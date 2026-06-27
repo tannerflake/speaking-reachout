@@ -193,9 +193,17 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
 
       {/* Active rules that will apply */}
       <div className="rounded-lg border border-zinc-200 bg-white p-4">
-        <h3 className="text-sm font-medium text-zinc-700">
-          Active rules applied to this run
-        </h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium text-zinc-700">
+            Active rules applied to this run
+          </h3>
+          <Link
+            href="/admin/settings/tailoring"
+            className="text-sm text-blue-600 hover:underline"
+          >
+            Edit rules
+          </Link>
+        </div>
         {activeRules.length === 0 ? (
           <p className="mt-1 text-sm text-zinc-400">
             No active tailoring rules.{" "}
