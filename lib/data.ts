@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { domainFromUrl } from "@/lib/utils";
+import { domainFromUrl, normalizeName } from "@/lib/utils";
 import type {
   Booking,
   Contact,
@@ -210,8 +210,16 @@ export async function getProcessedMessageIds(): Promise<Set<string>> {
 }
 
 /**
- * Existing lead keys for dedup during discovery. Uses the service-role client
- * so it works from a background context without a user session.
+ * Existing-organization keys for dedup during discovery. Uses the service-role
+ * client so it works from a background context without a user session.
+ *
+ * Discovery must not resurface an org we already know about, so this pulls from
+ * EVERY place an org can live, not just the CRM `leads` table:
+ *   - `leads`            — discovered + inbound leads already in the pipeline
+ *   - `site_content`     — venues Jeff has spoken at / is booked at (the public
+ *                          "Recent & upcoming engagements" list)
+ *   - `inbound_leads`    — website form captures, which may not be mirrored into
+ *                          `leads` yet (crm_lead_id still null)
  */
 export async function getExistingLeadKeys(): Promise<{
   names: Set<string>;
@@ -219,22 +227,47 @@ export async function getExistingLeadKeys(): Promise<{
   displayNames: string[];
 }> {
   const admin = createAdminClient();
-  const { data } = await admin
-    .from("leads")
-    .select("name, name_normalized, website");
   const names = new Set<string>();
   const domains = new Set<string>();
   const displayNames: string[] = [];
-  for (const row of data ?? []) {
+
+  const addName = (name: string | null | undefined) => {
+    if (!name) return;
+    const key = normalizeName(name);
+    if (!key) return;
+    if (!names.has(key)) displayNames.push(name);
+    names.add(key);
+  };
+
+  const [leads, engagements, inbound] = await Promise.all([
+    admin.from("leads").select("name, name_normalized, website"),
+    admin
+      .from("site_content")
+      .select("data")
+      .eq("section_key", "engagement"),
+    admin.from("inbound_leads").select("organization"),
+  ]);
+
+  for (const row of leads.data ?? []) {
     const r = row as {
       name: string;
       name_normalized: string | null;
       website: string | null;
     };
+    addName(r.name);
     if (r.name_normalized) names.add(r.name_normalized);
-    if (r.name) displayNames.push(r.name);
     const d = domainFromUrl(r.website);
     if (d) domains.add(d);
   }
+
+  for (const row of engagements.data ?? []) {
+    const data = (row as { data: { name?: string | null } | null }).data;
+    addName(data?.name);
+  }
+
+  for (const row of inbound.data ?? []) {
+    addName((row as { organization: string | null }).organization);
+  }
+
   return { names, domains, displayNames };
 }
