@@ -1,4 +1,4 @@
-import { listLeads, listCountries } from "@/lib/data";
+import { listLeads } from "@/lib/data";
 import { LEAD_STATUSES, type LeadStatus } from "@/lib/types";
 import { LeadsView } from "@/components/LeadsView";
 
@@ -10,18 +10,19 @@ export default async function LeadsPage({
   searchParams: Promise<{ status?: string }>;
 }) {
   const { status } = await searchParams;
-  const initialStatus = LEAD_STATUSES.includes(status as LeadStatus)
-    ? (status as LeadStatus)
+  const validFilters: string[] = [...LEAD_STATUSES, "drafted"];
+  const initialStatus = validFilters.includes(status ?? "")
+    ? (status as LeadStatus | "drafted")
     : undefined;
 
-  const [rows, countries] = await Promise.all([listLeads({}), listCountries()]);
+  const rows = await listLeads({});
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-zinc-900">Leads</h1>
       </div>
-      <LeadsView rows={rows} countries={countries} initialStatus={initialStatus} />
+      <LeadsView rows={rows} initialStatus={initialStatus} />
     </div>
   );
 }

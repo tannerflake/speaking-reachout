@@ -19,6 +19,8 @@ import { LEAD_STATUSES, PIPELINE_STATUSES } from "@/lib/types";
 export interface LeadListRow extends Lead {
   contactsCount: number;
   lastActivity: string;
+  /** True when the lead has at least one draft (unsent) outreach. */
+  hasUnsentDraft: boolean;
 }
 
 export interface LeadFilters {
@@ -59,7 +61,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
   const supabase = await createClient();
   let query = supabase
     .from("leads")
-    .select("*, contacts(count), interactions(created_at)")
+    .select("*, contacts(count), interactions(created_at), outreach(status)")
     .order("created_at", { ascending: false });
 
   if (filters.status) query = query.eq("status", filters.status);
@@ -71,6 +73,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
   type Row = Lead & {
     contacts: { count: number }[];
     interactions: { created_at: string }[];
+    outreach: { status: string }[];
   };
   return ((data as Row[]) ?? []).map((row) => {
     const activityTimes = (row.interactions ?? []).map((i) =>
@@ -83,6 +86,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
       ...row,
       contactsCount: row.contacts?.[0]?.count ?? 0,
       lastActivity: last,
+      hasUnsentDraft: (row.outreach ?? []).some((o) => o.status === "draft"),
     };
   });
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { StatusBadge, TypeBadge } from "@/components/Badge";
@@ -8,39 +8,56 @@ import { bulkDraft } from "@/app/actions/outreach";
 import { bulkDeleteLeads } from "@/app/actions/leads";
 import { LEAD_STATUSES } from "@/lib/types";
 import type { LeadListRow } from "@/lib/data";
-import type { LeadStatus, LeadType } from "@/lib/types";
+import type { LeadStatus } from "@/lib/types";
 import { formatDateTime, statusLabel } from "@/lib/utils";
 
-const TYPES: LeadType[] = ["event", "institution", "other"];
+// "drafted" is a synthetic filter (new leads with an unsent draft), not a real
+// lead status — so the dropdown value is a status OR this sentinel.
+const STATUS_FILTER_KEY = "leads:statusFilter";
 
 export function LeadsView({
   rows,
-  countries,
   initialStatus,
 }: {
   rows: LeadListRow[];
-  countries: string[];
-  initialStatus?: LeadStatus;
+  initialStatus?: LeadStatus | "drafted";
 }) {
   const [status, setStatus] = useState<string>(initialStatus ?? "");
-  const [type, setType] = useState<string>("");
-  const [country, setCountry] = useState<string>("");
   const [search, setSearch] = useState<string>("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const router = useRouter();
 
+  // Persist the chosen filter so it survives navigating away and back. A status
+  // in the URL (e.g. linked from the dashboard) wins and is remembered;
+  // otherwise restore the last selection from localStorage.
+  useEffect(() => {
+    if (initialStatus) {
+      localStorage.setItem(STATUS_FILTER_KEY, initialStatus);
+    } else {
+      const saved = localStorage.getItem(STATUS_FILTER_KEY);
+      if (saved) setStatus(saved);
+    }
+  }, [initialStatus]);
+
+  function changeStatus(value: string) {
+    setStatus(value);
+    localStorage.setItem(STATUS_FILTER_KEY, value);
+  }
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((r) => {
-      if (status && r.status !== status) return false;
-      if (type && r.type !== type) return false;
-      if (country && r.location_country !== country) return false;
+      if (status === "drafted") {
+        if (!(r.status === "new" && r.hasUnsentDraft)) return false;
+      } else if (status && r.status !== status) {
+        return false;
+      }
       if (q && !r.name.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [rows, status, type, country, search]);
+  }, [rows, status, search]);
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -113,37 +130,14 @@ export function LeadsView({
         />
         <select
           value={status}
-          onChange={(e) => setStatus(e.target.value)}
+          onChange={(e) => changeStatus(e.target.value)}
           className={selectClass}
         >
           <option value="">All statuses</option>
+          <option value="drafted">Drafted</option>
           {LEAD_STATUSES.map((s) => (
             <option key={s} value={s}>
               {statusLabel(s)}
-            </option>
-          ))}
-        </select>
-        <select
-          value={type}
-          onChange={(e) => setType(e.target.value)}
-          className={selectClass}
-        >
-          <option value="">All types</option>
-          {TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-        <select
-          value={country}
-          onChange={(e) => setCountry(e.target.value)}
-          className={selectClass}
-        >
-          <option value="">All countries</option>
-          {countries.map((c) => (
-            <option key={c} value={c}>
-              {c}
             </option>
           ))}
         </select>
