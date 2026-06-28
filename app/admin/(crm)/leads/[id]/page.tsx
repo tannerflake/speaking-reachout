@@ -12,6 +12,7 @@ import { BookingForm } from "@/components/BookingForm";
 import { ReachOutAgainButton } from "@/components/ReachOutAgainButton";
 import { AddNote } from "@/components/AddNote";
 import { ContactEmail } from "@/components/ContactEmail";
+import { ContactRelookup } from "@/components/ContactRelookup";
 import { contactResolverName } from "@/lib/contacts/resolver";
 import { formatDate, formatDateTime, looksLikeRealEmail } from "@/lib/utils";
 
@@ -149,6 +150,12 @@ export default async function LeadDetailPage({
                         >
                           {c.email}
                         </a>
+                        {canResolve && (
+                          <ContactRelookup
+                            contactId={c.id}
+                            providerName={resolverName}
+                          />
+                        )}
                       </div>
                     ) : (
                       <ContactEmail

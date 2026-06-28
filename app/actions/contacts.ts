@@ -76,6 +76,72 @@ export async function resolveContactEmail(
   return { email: result.email, provider: resolver.name };
 }
 
+/**
+ * Re-look up a contact via the configured paid provider and REPLACE it with the
+ * fresh result. Unlike resolveContactEmail, this runs even when the contact
+ * already has a (verified) email — for the case where that email bounced / does
+ * not exist. EXPLICIT, operator-triggered, one lookup per click. Leaves the
+ * existing contact untouched if the provider finds nothing usable.
+ */
+export async function relookupContact(
+  contactId: string,
+): Promise<{ email?: string; provider?: string; error?: string }> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("contacts")
+    .select("*, lead:leads(name, website, source_url)")
+    .eq("id", contactId)
+    .single();
+  if (!data) return { error: "Contact not found." };
+
+  const contact = data as ContactWithLead;
+
+  const resolver = getContactResolver();
+  if (resolver.name === "claude") {
+    return {
+      error:
+        "No email-finding provider is configured. Set CONTACT_RESOLVER=hunter (or apollo) with an API key to look up a fresh contact.",
+    };
+  }
+
+  const result = await resolver.resolve({
+    name: contact.lead?.name ?? "",
+    website: contact.lead?.website ?? null,
+    source_url: contact.source_url ?? contact.lead?.source_url ?? null,
+    claudeContact: null,
+  });
+
+  if (!result.email || !looksLikeRealEmail(result.email)) {
+    return {
+      provider: resolver.name,
+      error: `No fresh contact found via ${resolver.name}. The existing one was left unchanged — add an email manually instead.`,
+    };
+  }
+
+  // Replace the contact wholesale with the provider's result. Fall back to the
+  // existing name/role only when the provider didn't supply one.
+  const { error } = await supabase
+    .from("contacts")
+    .update({
+      name: result.name ?? contact.name,
+      role: result.role ?? contact.role,
+      email: result.email,
+      contact_status: result.contact_status,
+      source_url: result.source_url ?? contact.source_url,
+    })
+    .eq("id", contactId);
+  if (error) return { error: error.message };
+
+  const previous = contact.email ? ` (was ${contact.email})` : "";
+  await supabase.from("interactions").insert({
+    lead_id: contact.lead_id,
+    kind: "note",
+    detail: `Replaced contact via ${resolver.name}: ${result.email}${previous}.`,
+  });
+  revalidatePath(`/admin/leads/${contact.lead_id}`);
+  return { email: result.email, provider: resolver.name };
+}
+
 /** Manually set a contact's email (operator-confirmed → verified). */
 export async function setContactEmail(
   contactId: string,
