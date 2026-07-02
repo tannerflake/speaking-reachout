@@ -77,18 +77,32 @@ export async function ingestMessages(opts: {
   sentCap?: number;
   inboxCap?: number;
   concurrency?: number;
+  /**
+   * Skip listing SENT and fetch only INBOX. Used by the reply scanner, which
+   * cares only about inbound responses/bounces — our own sent copies are noise.
+   */
+  inboxOnly?: boolean;
 }): Promise<IngestResult> {
   const gmail = await getReadGmail();
 
-  let sentList: Array<{ id: string }>;
+  let sentList: Array<{ id: string }> = [];
   try {
-    sentList = await listIds(gmail, ["SENT"], opts.sentCap ?? 1500);
+    if (!opts.inboxOnly) {
+      sentList = await listIds(gmail, ["SENT"], opts.sentCap ?? 1500);
+    }
   } catch (e) {
     // 403 / insufficient permission → readonly scope wasn't granted.
     if (isScopeError(e)) throw new GmailReadScopeMissingError();
     throw e;
   }
-  const inboxList = await listIds(gmail, ["INBOX"], opts.inboxCap ?? 1500);
+
+  let inboxList: Array<{ id: string }>;
+  try {
+    inboxList = await listIds(gmail, ["INBOX"], opts.inboxCap ?? 1500);
+  } catch (e) {
+    if (isScopeError(e)) throw new GmailReadScopeMissingError();
+    throw e;
+  }
 
   // Dedup ids, then drop already-processed. SENT first (primary voice signal).
   const seen = new Set<string>();

@@ -85,6 +85,8 @@ export interface Outreach {
   gmail_thread_id: string | null;
   error: string | null;
   sent_at: string | null;
+  replied_at: string | null;
+  bounced_at: string | null;
   created_at: string;
 }
 

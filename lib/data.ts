@@ -214,6 +214,28 @@ export async function getProcessedMessageIds(): Promise<Set<string>> {
 }
 
 /**
+ * All Gmail message IDs the reply scanner has already examined. Kept separate
+ * from getProcessedMessageIds (Voice analysis) so the two features never hide
+ * inbound mail from each other.
+ */
+export async function getScannedReplyIds(): Promise<Set<string>> {
+  const admin = createAdminClient();
+  const ids = new Set<string>();
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await admin
+      .from("reply_scan_messages")
+      .select("gmail_message_id")
+      .range(from, from + pageSize - 1);
+    if (error || !data || data.length === 0) break;
+    for (const row of data)
+      ids.add((row as { gmail_message_id: string }).gmail_message_id);
+    if (data.length < pageSize) break;
+  }
+  return ids;
+}
+
+/**
  * Existing-organization keys for dedup during discovery. Uses the service-role
  * client so it works from a background context without a user session.
  *

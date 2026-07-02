@@ -1,6 +1,7 @@
 import { listLeads } from "@/lib/data";
 import { LEAD_STATUSES, type LeadStatus } from "@/lib/types";
 import { LeadsView } from "@/components/LeadsView";
+import { ScanEmailButton } from "@/components/ScanEmailButton";
 
 export const dynamic = "force-dynamic";
 
@@ -19,8 +20,9 @@ export default async function LeadsPage({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-zinc-900">Leads</h1>
+        <ScanEmailButton variant="secondary" />
       </div>
       <LeadsView rows={rows} initialStatus={initialStatus} />
     </div>

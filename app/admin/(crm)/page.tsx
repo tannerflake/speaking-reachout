@@ -4,6 +4,7 @@ import { getPipelineCounts, getRecentInteractions } from "@/lib/data";
 import { getCurrentUser } from "@/lib/auth/profile";
 import { PIPELINE_STATUSES } from "@/lib/types";
 import { statusClasses, statusLabel, formatDateTime } from "@/lib/utils";
+import { ScanEmailButton } from "@/components/ScanEmailButton";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +78,7 @@ export default async function DashboardPage() {
           >
             Tailoring settings
           </Link>
+          <ScanEmailButton variant="secondary" />
         </div>
       </section>
 
