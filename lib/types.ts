@@ -30,6 +30,9 @@ export const PIPELINE_STATUSES: LeadStatus[] = [
   "closed",
 ];
 
+/** Where a lead originated: outbound discovery vs. the jeffflake.com form. */
+export type LeadSource = "outbound" | "website_inbound";
+
 export type ContactStatus = "verified" | "unverified" | "needs_lookup";
 
 export type OutreachStatus = "draft" | "sent" | "failed";
@@ -58,6 +61,7 @@ export interface Lead {
   fit_rationale: string | null;
   suggested_topics: string[];
   status: LeadStatus;
+  source: LeadSource;
   name_normalized: string;
   created_at: string;
   updated_at: string;

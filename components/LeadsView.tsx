@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { StatusBadge, TypeBadge } from "@/components/Badge";
+import { SourceBadge, StatusBadge, TypeBadge } from "@/components/Badge";
 import { bulkDraft } from "@/app/actions/outreach";
 import { bulkDeleteLeads } from "@/app/actions/leads";
 import { LEAD_STATUSES } from "@/lib/types";
@@ -14,6 +14,7 @@ import { formatDateTime, statusLabel } from "@/lib/utils";
 // "drafted" is a synthetic filter (new leads with an unsent draft), not a real
 // lead status — so the dropdown value is a status OR this sentinel.
 const STATUS_FILTER_KEY = "leads:statusFilter";
+const SOURCE_FILTER_KEY = "leads:sourceFilter";
 
 export function LeadsView({
   rows,
@@ -23,6 +24,7 @@ export function LeadsView({
   initialStatus?: LeadStatus | "drafted";
 }) {
   const [status, setStatus] = useState<string>(initialStatus ?? "");
+  const [source, setSource] = useState<string>("");
   const [search, setSearch] = useState<string>("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
@@ -39,11 +41,18 @@ export function LeadsView({
       const saved = localStorage.getItem(STATUS_FILTER_KEY);
       if (saved) setStatus(saved);
     }
+    const savedSource = localStorage.getItem(SOURCE_FILTER_KEY);
+    if (savedSource) setSource(savedSource);
   }, [initialStatus]);
 
   function changeStatus(value: string) {
     setStatus(value);
     localStorage.setItem(STATUS_FILTER_KEY, value);
+  }
+
+  function changeSource(value: string) {
+    setSource(value);
+    localStorage.setItem(SOURCE_FILTER_KEY, value);
   }
 
   const filtered = useMemo(() => {
@@ -54,10 +63,11 @@ export function LeadsView({
       } else if (status && r.status !== status) {
         return false;
       }
+      if (source && r.source !== source) return false;
       if (q && !r.name.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [rows, status, search]);
+  }, [rows, status, source, search]);
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -141,6 +151,15 @@ export function LeadsView({
             </option>
           ))}
         </select>
+        <select
+          value={source}
+          onChange={(e) => changeSource(e.target.value)}
+          className={selectClass}
+        >
+          <option value="">All sources</option>
+          <option value="website_inbound">Via jeffflake.com</option>
+          <option value="outbound">Outbound</option>
+        </select>
       </div>
 
       {/* Bulk action bar */}
@@ -217,12 +236,15 @@ export function LeadsView({
                     />
                   </td>
                   <td>
-                    <Link
-                      href={`/admin/leads/${r.id}`}
-                      className="font-medium text-blue-600 hover:underline"
-                    >
-                      {r.name}
-                    </Link>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Link
+                        href={`/admin/leads/${r.id}`}
+                        className="font-medium text-blue-600 hover:underline"
+                      >
+                        {r.name}
+                      </Link>
+                      <SourceBadge source={r.source} />
+                    </div>
                   </td>
                   <td>
                     <TypeBadge type={r.type} />

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getLead, getLeadInteractions } from "@/lib/data";
 import {
   ContactStatusBadge,
+  SourceBadge,
   StatusBadge,
   TypeBadge,
 } from "@/components/Badge";
@@ -52,6 +53,7 @@ export default async function LeadDetailPage({
           <h1 className="text-xl font-semibold text-zinc-900">{lead.name}</h1>
           <TypeBadge type={lead.type} />
           <StatusBadge status={lead.status} />
+          <SourceBadge source={lead.source} />
         </div>
         <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-zinc-500">
           <span>

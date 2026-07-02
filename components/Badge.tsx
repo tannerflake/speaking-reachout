@@ -5,7 +5,12 @@ import {
   statusClasses,
   statusLabel,
 } from "@/lib/utils";
-import type { ContactStatus, LeadStatus, OutreachStatus } from "@/lib/types";
+import type {
+  ContactStatus,
+  LeadSource,
+  LeadStatus,
+  OutreachStatus,
+} from "@/lib/types";
 
 function Pill({
   children,
@@ -38,6 +43,19 @@ export function ContactStatusBadge({ status }: { status: ContactStatus }) {
 export function OutreachStatusBadge({ status }: { status: OutreachStatus }) {
   const label = { draft: "Draft", sent: "Sent", failed: "Failed" }[status];
   return <Pill className={outreachStatusClasses(status)}>{label}</Pill>;
+}
+
+/**
+ * Marks leads that arrived through the jeffflake.com booking form. Renders
+ * nothing for outbound (discovered) leads to keep the common case uncluttered.
+ */
+export function SourceBadge({ source }: { source: LeadSource }) {
+  if (source !== "website_inbound") return null;
+  return (
+    <Pill className="border-sky-200 bg-sky-50 text-sky-700">
+      Via jeffflake.com
+    </Pill>
+  );
 }
 
 export function TypeBadge({ type }: { type: string }) {
