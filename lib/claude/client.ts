@@ -1,16 +1,35 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { requireEnv } from "@/lib/env";
+import { getEnv, requireEnv } from "@/lib/env";
 
-// Per the build spec (Section 5) — current Opus.
+// High-powered model — reserved for the work that justifies the cost: org
+// research and outreach drafting (both via generateWithWebSearch).
 export const CLAUDE_MODEL = "claude-opus-4-8";
 
+// Lower-cost model for light, well-scoped tasks that don't need Opus: site
+// content edits, rule parsing, and voice analysis (all via generateText).
+export const CLAUDE_MODEL_CHEAP = "claude-sonnet-5";
+
 let _client: Anthropic | null = null;
+let _cheapClient: Anthropic | null = null;
 
 export function getAnthropic(): Anthropic {
   if (!_client) {
     _client = new Anthropic({ apiKey: requireEnv("ANTHROPIC_API_KEY") });
   }
   return _client;
+}
+
+/**
+ * Client for the lower-cost model. Uses its own key (ANTHROPIC_API_KEY_CHEAP)
+ * so its usage/billing is separate; falls back to the main key if that var
+ * isn't set, so nothing breaks if only one key is configured.
+ */
+export function getAnthropicCheap(): Anthropic {
+  if (!_cheapClient) {
+    const apiKey = getEnv("ANTHROPIC_API_KEY_CHEAP") ?? requireEnv("ANTHROPIC_API_KEY");
+    _cheapClient = new Anthropic({ apiKey });
+  }
+  return _cheapClient;
 }
 
 /**
@@ -46,17 +65,18 @@ export function extractText(message: Anthropic.Message): string {
 }
 
 /**
- * Single-shot text generation (no tools). Used for short, deterministic tasks
- * like parsing a tailoring instruction into a structured rule.
+ * Single-shot text generation (no tools) on the lower-cost model. Used for
+ * short, well-scoped tasks — site content edits, parsing a tailoring
+ * instruction into a structured rule, and voice analysis.
  */
 export async function generateText(opts: {
   system: string;
   userPrompt: string;
   maxTokens?: number;
 }): Promise<string> {
-  const client = getAnthropic();
+  const client = getAnthropicCheap();
   const message = await client.messages.create({
-    model: CLAUDE_MODEL,
+    model: CLAUDE_MODEL_CHEAP,
     max_tokens: opts.maxTokens ?? 2048,
     thinking: { type: "adaptive" },
     system: opts.system,
