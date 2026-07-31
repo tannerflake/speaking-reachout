@@ -3,9 +3,15 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { SourceBadge, StatusBadge, TypeBadge } from "@/components/Badge";
+import {
+  ContactGapBadge,
+  SourceBadge,
+  StatusBadge,
+  TypeBadge,
+} from "@/components/Badge";
 import { bulkDraft } from "@/app/actions/outreach";
 import { bulkDeleteLeads } from "@/app/actions/leads";
+import { bulkFindContacts } from "@/app/actions/contacts";
 import { LEAD_STATUSES } from "@/lib/types";
 import type { LeadListRow } from "@/lib/data";
 import type { LeadStatus } from "@/lib/types";
@@ -102,6 +108,37 @@ export function LeadsView({
     });
   }
 
+  function runBulkFindContacts() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    const needing = filtered.filter(
+      (r) => selected.has(r.id) && !r.hasContactEmail,
+    ).length;
+    if (needing === 0) {
+      setMsg("All selected leads already have a contact email.");
+      return;
+    }
+    const ok = window.confirm(
+      `Look up contact emails for ${needing} lead${
+        needing === 1 ? "" : "s"
+      } via the configured provider? Each lookup costs one paid credit. Leads that already have an email are skipped.`,
+    );
+    if (!ok) return;
+    setMsg(null);
+    start(async () => {
+      const res = await bulkFindContacts(ids);
+      setMsg(
+        res.error
+          ? `Contact lookup failed: ${res.error}`
+          : `Found ${res.found} contact email${res.found === 1 ? "" : "s"}${
+              res.notFound ? `, ${res.notFound} not found` : ""
+            }${res.skipped ? `, ${res.skipped} already had one` : ""}.`,
+      );
+      setSelected(new Set());
+      router.refresh();
+    });
+  }
+
   function runBulkDelete() {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
@@ -173,6 +210,13 @@ export function LeadsView({
               className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
             >
               Delete
+            </button>
+            <button
+              onClick={runBulkFindContacts}
+              disabled={pending}
+              className="rounded-md border border-blue-300 bg-white px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-60"
+            >
+              {pending ? "Working…" : `Find Contacts for ${selected.size}`}
             </button>
             <button
               onClick={runBulkDraft}
@@ -255,7 +299,15 @@ export function LeadsView({
                   <td>
                     <StatusBadge status={r.status} />
                   </td>
-                  <td className="text-zinc-600">{r.contactsCount}</td>
+                  <td className="text-zinc-600">
+                    <div className="flex items-center gap-2">
+                      <span>{r.contactsCount}</span>
+                      <ContactGapBadge
+                        contactsCount={r.contactsCount}
+                        hasContactEmail={r.hasContactEmail}
+                      />
+                    </div>
+                  </td>
                   <td className="text-zinc-500">
                     {formatDateTime(r.lastActivity)}
                   </td>

@@ -58,6 +58,25 @@ export function SourceBadge({ source }: { source: LeadSource }) {
   );
 }
 
+/**
+ * Flags leads that can't be emailed yet: no contact at all, or contacts whose
+ * emails are all missing/unusable. Renders nothing once a usable email exists.
+ */
+export function ContactGapBadge({
+  contactsCount,
+  hasContactEmail,
+}: {
+  contactsCount: number;
+  hasContactEmail: boolean;
+}) {
+  if (hasContactEmail) return null;
+  return (
+    <Pill className="border-amber-200 bg-amber-50 text-amber-700">
+      {contactsCount === 0 ? "No contact" : "No email"}
+    </Pill>
+  );
+}
+
 export function TypeBadge({ type }: { type: string }) {
   return (
     <Pill className="border-zinc-200 bg-zinc-50 text-zinc-600">{type}</Pill>

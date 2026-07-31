@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { domainFromUrl, normalizeName } from "@/lib/utils";
+import { domainFromUrl, looksLikeRealEmail, normalizeName } from "@/lib/utils";
 import type {
   Booking,
   Contact,
@@ -18,6 +18,8 @@ import { LEAD_STATUSES, PIPELINE_STATUSES } from "@/lib/types";
 
 export interface LeadListRow extends Lead {
   contactsCount: number;
+  /** True when at least one contact has a usable email address. */
+  hasContactEmail: boolean;
   lastActivity: string;
   /** True when the lead has at least one draft (unsent) outreach. */
   hasUnsentDraft: boolean;
@@ -61,7 +63,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
   const supabase = await createClient();
   let query = supabase
     .from("leads")
-    .select("*, contacts(count), interactions(created_at), outreach(status)")
+    .select("*, contacts(email), interactions(created_at), outreach(status)")
     .order("created_at", { ascending: false });
 
   if (filters.status) query = query.eq("status", filters.status);
@@ -71,7 +73,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
 
   const { data } = await query;
   type Row = Lead & {
-    contacts: { count: number }[];
+    contacts: { email: string | null }[];
     interactions: { created_at: string }[];
     outreach: { status: string }[];
   };
@@ -82,9 +84,11 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
     const last = activityTimes.length
       ? new Date(Math.max(...activityTimes)).toISOString()
       : row.updated_at;
+    const contacts = row.contacts ?? [];
     return {
       ...row,
-      contactsCount: row.contacts?.[0]?.count ?? 0,
+      contactsCount: contacts.length,
+      hasContactEmail: contacts.some((c) => looksLikeRealEmail(c.email)),
       lastActivity: last,
       hasUnsentDraft: (row.outreach ?? []).some((o) => o.status === "draft"),
     };

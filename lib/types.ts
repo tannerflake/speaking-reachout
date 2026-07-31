@@ -10,7 +10,8 @@ export type LeadStatus =
   | "booked"
   | "closed"
   | "closed_not_me"
-  | "not_interested";
+  | "not_interested"
+  | "junk";
 
 export const LEAD_STATUSES: LeadStatus[] = [
   "new",
@@ -20,6 +21,7 @@ export const LEAD_STATUSES: LeadStatus[] = [
   "closed",
   "closed_not_me",
   "not_interested",
+  "junk",
 ];
 
 export const PIPELINE_STATUSES: LeadStatus[] = [

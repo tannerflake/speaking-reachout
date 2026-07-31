@@ -61,6 +61,7 @@ export function statusLabel(status: LeadStatus): string {
     closed: "Closed",
     closed_not_me: "Closed (Not Me)",
     not_interested: "Not interested",
+    junk: "Junk",
   }[status];
 }
 
@@ -73,6 +74,7 @@ export function statusClasses(status: LeadStatus): string {
     closed: "bg-violet-50 text-violet-700 border-violet-200",
     closed_not_me: "bg-teal-50 text-teal-700 border-teal-200",
     not_interested: "bg-rose-50 text-rose-700 border-rose-200",
+    junk: "bg-stone-100 text-stone-500 border-stone-200",
   }[status];
 }
 

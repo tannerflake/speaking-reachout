@@ -142,6 +142,129 @@ export async function relookupContact(
   return { email: result.email, provider: resolver.name };
 }
 
+export interface BulkFindResult {
+  /** Leads that got a fresh contact email from the provider. */
+  found: number;
+  /** Leads skipped because a contact already had a usable email. */
+  skipped: number;
+  /** Leads where the provider came up empty. */
+  notFound: number;
+  error?: string;
+}
+
+/**
+ * Find contact emails for many leads at once via the configured paid provider.
+ * EXPLICIT, operator-triggered from the leads list (the UI confirms the number
+ * of paid lookups first). Leads that already have a usable contact email are
+ * skipped and cost nothing; every other lead is exactly one provider lookup.
+ */
+export async function bulkFindContacts(
+  leadIds: string[],
+): Promise<BulkFindResult> {
+  const empty = { found: 0, skipped: 0, notFound: 0 };
+  if (leadIds.length === 0) return empty;
+
+  const resolver = getContactResolver();
+  if (resolver.name === "claude") {
+    return {
+      ...empty,
+      error:
+        "No email-finding provider is configured. Set CONTACT_RESOLVER=hunter (or apollo) with an API key.",
+    };
+  }
+
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("leads")
+    .select("id, name, website, source_url, contacts(*)")
+    .in("id", leadIds);
+
+  type LeadRow = {
+    id: string;
+    name: string;
+    website: string | null;
+    source_url: string | null;
+    contacts: Contact[];
+  };
+  const leads = (data as LeadRow[]) ?? [];
+
+  let found = 0;
+  let skipped = 0;
+  let notFound = 0;
+
+  // Low concurrency to stay polite to the provider API.
+  const queue = [...leads];
+  async function worker() {
+    for (;;) {
+      const lead = queue.shift();
+      if (!lead) return;
+
+      const contacts = lead.contacts ?? [];
+      if (contacts.some((c) => looksLikeRealEmail(c.email))) {
+        skipped += 1;
+        continue;
+      }
+
+      const result = await resolver.resolve({
+        name: lead.name,
+        website: lead.website,
+        source_url: lead.source_url,
+        claudeContact: null,
+      });
+
+      if (!result.email || !looksLikeRealEmail(result.email)) {
+        notFound += 1;
+        continue;
+      }
+
+      // Fill the existing email-less contact row if there is one; otherwise
+      // create the lead's first contact.
+      const existing = contacts[0];
+      if (existing) {
+        const update: Record<string, unknown> = {
+          email: result.email,
+          contact_status: result.contact_status,
+          source_url: result.source_url ?? existing.source_url,
+        };
+        if (!existing.name && result.name) update.name = result.name;
+        if (!existing.role && result.role) update.role = result.role;
+        const { error } = await supabase
+          .from("contacts")
+          .update(update)
+          .eq("id", existing.id);
+        if (error) {
+          notFound += 1;
+          continue;
+        }
+      } else {
+        const { error } = await supabase.from("contacts").insert({
+          lead_id: lead.id,
+          name: result.name,
+          role: result.role,
+          email: result.email,
+          contact_status: result.contact_status,
+          source_url: result.source_url,
+        });
+        if (error) {
+          notFound += 1;
+          continue;
+        }
+      }
+
+      await supabase.from("interactions").insert({
+        lead_id: lead.id,
+        kind: "note",
+        detail: `Found contact email via ${resolver.name}: ${result.email}.`,
+      });
+      found += 1;
+    }
+  }
+  await Promise.all([worker(), worker()]);
+
+  revalidatePath("/admin/leads");
+  return { found, skipped, notFound };
+}
+
 /** Manually set a contact's email (operator-confirmed → verified). */
 export async function setContactEmail(
   contactId: string,
