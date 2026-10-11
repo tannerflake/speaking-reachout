@@ -109,18 +109,18 @@ web-search tool for lead discovery and outreach research. No extra setup needed.
 
 ## 5. Contact resolution (optional, swappable)
 
-Contact emails are **never guessed**. There are two paths, deliberately split so
-a paid lookup provider is only billed when you choose to use it:
+Contact emails are **never guessed**. There are two paths:
 
-- **Discovery (free, no credits):** uses only the public contact Claude already
-  surfaces during its web-search pass. It never calls Hunter/Apollo, so a 50-lead
-  Discover run costs **zero** email-lookup credits. Leads with no public email
-  found land as `needs_lookup`.
-- **On-demand (paid, one lookup at a time):** on a lead's page, a contact
-  without an email shows a **"Find email via {provider}"** button plus a manual
-  email field. The paid provider (Hunter/Apollo) is hit **only** when you click
-  that button, for that one lead — so you spend a credit only on leads you
-  actually pursue, and you review the found address before sending.
+- **Discovery stream (free, no credits):** while leads stream in, only the
+  public contact Claude surfaced during its web-search pass is stored. A lead
+  with no public email lands as `needs_lookup` for a moment.
+- **Enrich (paid, automatic per lead):** with auto-enrich on (the default),
+  each new lead is immediately enriched: web-search models find up to seven
+  people, one Hunter domain search fills gaps, and Hunter's per-person Email
+  Finder runs for anyone still missing an email, including the contact
+  discovery itself surfaced. The goal is that a net-new lead arrives sendable
+  with no manual "Find email" clicks. The per-contact **"Find email via
+  {provider}"** button and manual email field remain for the rare miss.
 
 Configure the on-demand provider:
 
@@ -189,8 +189,9 @@ Apply `supabase/migrations/0020_followups.sql` before using this.
 
 - **Discover → ready to send** — with "Find contacts and draft outreach"
   checked (default), the Discover page calls `enrichLead` for each lead the
-  moment it streams in: `findMultipleContacts` (web-search models, then one
-  Hunter domain search for gaps, 7-contact cap) followed by
+  moment it streams in: `findMultipleContacts` (web-search models, one Hunter
+  domain search, then a per-person Hunter lookup for anyone still without an
+  email, 7-contact cap) followed by
   `draftForAllContacts` (one personalized draft per contact with an email).
   Two leads are enriched at a time; each call is one lead so it stays inside
   function limits. The Leads bulk bar has the same action as

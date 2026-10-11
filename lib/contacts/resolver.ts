@@ -1,7 +1,7 @@
 import { getEnv } from "@/lib/env";
 import { domainFromUrl, looksLikeRealEmail } from "@/lib/utils";
 import type { ContactStatus } from "@/lib/types";
-import { personKey } from "@/lib/contacts/multiSource";
+import { hunterFindPerson } from "@/lib/contacts/hunter";
 
 export interface ResolvedContact {
   name: string | null;
@@ -137,40 +137,15 @@ class HunterContactResolver implements ContactResolver {
 
   /** Hunter Email Finder: one named person at a domain (1 credit). */
   private async findPerson(fullName: string, domain: string): Promise<ResolvedContact> {
-    const key = personKey(fullName).split(" ");
-    if (key.length < 2) return { ...NEEDS_LOOKUP };
-    try {
-      const url = new URL("https://api.hunter.io/v2/email-finder");
-      url.searchParams.set("domain", domain);
-      url.searchParams.set("first_name", key[0]);
-      url.searchParams.set("last_name", key[key.length - 1]);
-      url.searchParams.set("api_key", this.apiKey);
-      const res = await fetch(url, { method: "GET" });
-      if (!res.ok) return { ...NEEDS_LOOKUP };
-      const json = (await res.json()) as {
-        data?: {
-          email?: string | null;
-          score?: number;
-          position?: string | null;
-          verification?: { status?: string | null };
-        };
-      };
-      const d = json.data;
-      if (!d?.email || !looksLikeRealEmail(d.email) || (d.score ?? 0) < 50) {
-        return { ...NEEDS_LOOKUP };
-      }
-      return {
-        name: fullName,
-        role: d.position ?? null,
-        email: d.email,
-        // Email Finder infers from patterns; only Hunter's "valid" check counts
-        // as verified.
-        contact_status: d.verification?.status === "valid" ? "verified" : "unverified",
-        source_url: `https://${domain}`,
-      };
-    } catch {
-      return { ...NEEDS_LOOKUP };
-    }
+    const hit = await hunterFindPerson(fullName, domain, this.apiKey);
+    if (!hit) return { ...NEEDS_LOOKUP };
+    return {
+      name: fullName,
+      role: hit.position,
+      email: hit.email,
+      contact_status: hit.contact_status,
+      source_url: `https://${domain}`,
+    };
   }
 }
 
@@ -244,8 +219,9 @@ function roleScore(position?: string): number {
 /**
  * Select the env-configured resolver (CONTACT_RESOLVER), falling back to claude.
  * This is the PAID path — it may hit an external API (Hunter/Apollo) that
- * costs credits. Only call it from an explicit, operator-triggered action
- * (e.g. "Find email" on a lead), never in bulk during discovery.
+ * costs credits. Used by the per-contact "Find email" button and by the
+ * enrich pipeline, which fills every email-less contact on a lead so new
+ * leads arrive sendable.
  */
 export function getContactResolver(): ContactResolver {
   const choice = (getEnv("CONTACT_RESOLVER") ?? "claude").toLowerCase();
@@ -261,9 +237,9 @@ export function getContactResolver(): ContactResolver {
 }
 
 /**
- * Free resolver used during discovery — only reuses the contact Claude already
- * surfaced inline (no extra API cost). Never hits Hunter/Apollo, so a large
- * discovery run consumes zero external email-lookup credits.
+ * Free resolver used while discovery streams leads in — only reuses the
+ * contact Claude surfaced inline. Hunter/Apollo run afterwards, per lead, in
+ * the enrich step.
  */
 export function getInlineContactResolver(): ContactResolver {
   return new ClaudeContactResolver();

@@ -282,8 +282,10 @@ export interface MultiFindResult {
 /**
  * Find up to MAX_CONTACTS_PER_LEAD people at one lead by asking every
  * configured web-search LLM (Claude, OpenAI, Gemini, Perplexity), verifying
- * them against the pages they cite, and filling gaps with one Hunter domain
- * search. EXPLICIT, operator-triggered, one lead at a time.
+ * them against the pages they cite, and filling gaps with Hunter (one domain
+ * search plus a per-person lookup for anyone still missing an email). Also
+ * resolves any email-less contact already on the lead. Runs per lead, from the
+ * lead page button and from auto-enrich after discovery.
  */
 export async function findMultipleContacts(leadId: string): Promise<MultiFindResult> {
   const empty = { added: 0, withEmail: 0, sources: [], failed: [], hunterUsed: false };
@@ -309,11 +311,19 @@ export async function findMultipleContacts(leadId: string): Promise<MultiFindRes
     contacts: Contact[];
   };
   const existing = lead.contacts ?? [];
+
+  // Contacts already on the lead with a name but no email (typically the one
+  // discovery itself surfaced): resolve them through the paid provider now so
+  // the operator never has to click "Find email" by hand.
+  const filled = await fillMissingEmails(supabase, lead, existing);
+  let hunterUsedForExisting = filled > 0;
+
   const slots =
     MAX_CONTACTS_PER_LEAD - existing.filter((c) => looksLikeRealEmail(c.email)).length;
   if (slots <= 0) {
     return {
       ...empty,
+      hunterUsed: hunterUsedForExisting,
       error: `This lead already has ${MAX_CONTACTS_PER_LEAD} contacts with emails.`,
     };
   }
@@ -330,12 +340,13 @@ export async function findMultipleContacts(leadId: string): Promise<MultiFindRes
     max: slots,
   });
 
+  hunterUsedForExisting = hunterUsedForExisting || result.hunterUsed;
   if (result.contacts.length === 0) {
     return {
       ...empty,
       sources: result.succeeded,
       failed: result.failed,
-      hunterUsed: result.hunterUsed,
+      hunterUsed: hunterUsedForExisting,
       error:
         result.succeeded.length === 0
           ? "None of the contact sources returned results."
@@ -372,8 +383,59 @@ export async function findMultipleContacts(leadId: string): Promise<MultiFindRes
     withEmail,
     sources: result.succeeded,
     failed: result.failed,
-    hunterUsed: result.hunterUsed,
+    hunterUsed: hunterUsedForExisting,
   };
+}
+
+/**
+ * Resolve emails for contacts that already exist on a lead but have none.
+ * Mutates `contacts` in place so callers see the new emails. Returns the
+ * number of paid lookups attempted (0 when no provider is configured).
+ */
+async function fillMissingEmails(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  lead: { id: string; name: string; website: string | null; source_url: string | null },
+  contacts: Contact[],
+): Promise<number> {
+  const resolver = getContactResolver();
+  if (resolver.name === "claude") return 0;
+
+  const targets = contacts.filter((c) => c.name && !looksLikeRealEmail(c.email));
+  if (targets.length === 0) return 0;
+
+  const resolvedLines: string[] = [];
+  await Promise.all(
+    targets.map(async (c) => {
+      const result = await resolver.resolve({
+        name: lead.name,
+        website: lead.website,
+        source_url: c.source_url ?? lead.source_url,
+        personName: c.name,
+        claudeContact: null,
+      });
+      if (!result.email || !looksLikeRealEmail(result.email)) return;
+      const update: Record<string, unknown> = {
+        email: result.email,
+        contact_status: result.contact_status,
+        source_url: result.source_url ?? c.source_url,
+      };
+      if (!c.role && result.role) update.role = result.role;
+      const { error } = await supabase.from("contacts").update(update).eq("id", c.id);
+      if (error) return;
+      c.email = result.email;
+      c.contact_status = result.contact_status;
+      resolvedLines.push(`${c.name} <${result.email}>`);
+    }),
+  );
+
+  if (resolvedLines.length > 0) {
+    await supabase.from("interactions").insert({
+      lead_id: lead.id,
+      kind: "note",
+      detail: `Resolved ${resolvedLines.length} existing contact email(s) via ${resolver.name}: ${resolvedLines.join("; ")}.`,
+    });
+  }
+  return targets.length;
 }
 
 /** Manually set a contact's email (operator-confirmed → verified). */

@@ -3,6 +3,10 @@ import { extractJson } from "@/lib/claude/json";
 import { getEnv } from "@/lib/env";
 import { domainFromUrl, looksLikeRealEmail, mapWithConcurrency } from "@/lib/utils";
 import type { ContactStatus } from "@/lib/types";
+import { hunterDomainPeople, hunterFindPerson } from "@/lib/contacts/hunter";
+import { personKey } from "@/lib/contacts/personKey";
+
+export { personKey };
 
 /**
  * Multi-source contact finder. Asks several web-searching LLMs (Claude,
@@ -11,10 +15,14 @@ import type { ContactStatus } from "@/lib/types";
  *   1. checks each person actually appears on the page the model cited,
  *   2. keeps an email only if it's printed on that page (never a guessed
  *      pattern), and
- *   3. fills remaining gaps with ONE Hunter domain search (1 credit).
+ *   3. fills remaining gaps with ONE Hunter domain search (1 credit), then
+ *   4. runs Hunter's per-person Email Finder (1 credit each) for anyone still
+ *      missing an email, so a contact never lands as "needs lookup" when
+ *      Hunter could have answered.
  *
  * Every provider is optional: a missing key or a failed call just drops that
- * source. EXPLICIT, operator-triggered only (see cost-conscious rule).
+ * source. Hunter credits are spent automatically here by design: the
+ * operator asked that net-new leads arrive sendable without manual lookups.
  */
 
 export const MAX_CONTACTS_PER_LEAD = 7;
@@ -232,27 +240,6 @@ function parseCandidates(text: string): Candidate[] {
 
 // --- Verification -----------------------------------------------------------
 
-const HONORIFICS = new Set([
-  "dr", "prof", "professor", "mr", "mrs", "ms", "miss", "rev", "fr", "sr",
-  "jr", "ii", "iii", "iv", "phd", "md", "jd", "esq", "the", "hon",
-]);
-
-/** "Dr. Paul S. Edwards, PhD" -> "paul edwards" (first + last, lowercased). */
-export function personKey(name: string): string {
-  // Credentials come after a comma ("Gina Shipley, MPA"): drop them.
-  const parts = name
-    .split(",")[0]
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z\s'-]/g, " ")
-    .split(/\s+/)
-    .filter((p) => p && !HONORIFICS.has(p) && p.length > 1);
-  if (parts.length === 0) return "";
-  if (parts.length === 1) return parts[0];
-  return `${parts[0]} ${parts[parts.length - 1]}`;
-}
-
 interface PageCheck {
   fetched: boolean;
   text: string;
@@ -334,30 +321,6 @@ function roleRank(role: string | null): number {
   if (/(chair|coordinator|manager|associate director|director)/.test(r)) return 2;
   if (/(president|provost|chancellor|dean)/.test(r)) return 1;
   return 1;
-}
-
-// --- Hunter (one domain search) ---------------------------------------------
-
-interface HunterPerson {
-  value?: string;
-  first_name?: string;
-  last_name?: string;
-  position?: string;
-}
-
-async function hunterDomainPeople(domain: string, apiKey: string): Promise<HunterPerson[]> {
-  try {
-    const url = new URL("https://api.hunter.io/v2/domain-search");
-    url.searchParams.set("domain", domain);
-    url.searchParams.set("api_key", apiKey);
-    url.searchParams.set("limit", "10");
-    const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
-    if (!res.ok) return [];
-    const json = (await res.json()) as { data?: { emails?: HunterPerson[] } };
-    return json.data?.emails ?? [];
-  } catch {
-    return [];
-  }
 }
 
 // --- Orchestrator -----------------------------------------------------------
@@ -519,6 +482,30 @@ export async function findContactsMultiSource(
           sources: ["hunter"],
         });
       }
+    }
+  }
+
+  // Per-person Email Finder (1 credit each) for anyone the domain search
+  // didn't cover. Limited to the people we'd actually keep, so we never pay
+  // for contacts that would be cut by the `max` slice below.
+  if (hunterKey && orgDomain) {
+    const ranked = [...found].sort(
+      (a, b) =>
+        Number(Boolean(b.email)) - Number(Boolean(a.email)) ||
+        b.sources.length - a.sources.length ||
+        roleRank(b.role) - roleRank(a.role),
+    );
+    const missing = ranked.slice(0, input.max).filter((f) => !f.email);
+    if (missing.length > 0) {
+      hunterUsed = true;
+      await mapWithConcurrency(missing, 3, async (f) => {
+        const hit = await hunterFindPerson(f.name, orgDomain, hunterKey);
+        if (!hit || excludeEmails.has(hit.email)) return;
+        f.email = hit.email;
+        f.contact_status = hit.contact_status;
+        if (!f.role && hit.position) f.role = hit.position;
+        if (!f.sources.includes("hunter")) f.sources.push("hunter");
+      });
     }
   }
 
