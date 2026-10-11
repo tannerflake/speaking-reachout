@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { findMultipleContacts } from "@/app/actions/contacts";
+import { useInlineConfirm } from "@/components/InlineConfirm";
 
 /**
  * Multi-source contact search for one lead: every configured web-search LLM
@@ -23,30 +24,32 @@ export function FindContactsButton({
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const router = useRouter();
+  const { ask, confirmEl } = useInlineConfirm();
 
   function run() {
     const cost = hunterAvailable
       ? " Uses one AI search per source and at most one Hunter credit."
       : " Uses one AI search per source.";
-    if (!window.confirm(`Search for up to ${max} contacts at this org?${cost}`)) return;
-    setMessage(null);
-    setError(null);
-    start(async () => {
-      const res = await findMultipleContacts(leadId);
-      const skipped = res.failed.length
-        ? ` Skipped: ${res.failed.map((f) => `${f.source} (${f.reason})`).join("; ")}.`
-        : "";
-      if (res.error) {
-        setError(`${res.error}${skipped}`);
-      } else {
-        setMessage(
-          `Added ${res.added} contacts, ${res.withEmail} with email, from ${[
-            ...res.sources,
-            ...(res.hunterUsed ? ["hunter"] : []),
-          ].join(", ")}.${skipped}`,
-        );
-      }
-      router.refresh();
+    ask(`Search for up to ${max} contacts at this org?${cost}`, () => {
+      setMessage(null);
+      setError(null);
+      start(async () => {
+        const res = await findMultipleContacts(leadId);
+        const skipped = res.failed.length
+          ? ` Skipped: ${res.failed.map((f) => `${f.source} (${f.reason})`).join("; ")}.`
+          : "";
+        if (res.error) {
+          setError(`${res.error}${skipped}`);
+        } else {
+          setMessage(
+            `Added ${res.added} contacts, ${res.withEmail} with email, from ${[
+              ...res.sources,
+              ...(res.hunterUsed ? ["hunter"] : []),
+            ].join(", ")}.${skipped}`,
+          );
+        }
+        router.refresh();
+      });
     });
   }
 
@@ -63,6 +66,7 @@ export function FindContactsButton({
         {sources.join(" + ")}
         {hunterAvailable ? " + Hunter" : ""}
       </span>
+      {confirmEl && <div className="mt-2">{confirmEl}</div>}
       {pending && (
         <p className="mt-2 text-sm text-zinc-500">
           Asking each AI to search the web for center directors, program staff,

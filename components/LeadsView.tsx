@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -26,6 +33,7 @@ import { LEAD_STATUSES } from "@/lib/types";
 import type { LeadListRow } from "@/lib/data";
 import type { LeadStatus } from "@/lib/types";
 import { formatDateTime, statusLabel } from "@/lib/utils";
+import { useInlineConfirm } from "@/components/InlineConfirm";
 
 // Send-queue pacing options offered in the bulk bar (minutes to spread over).
 const SPREAD_OPTIONS = [
@@ -36,7 +44,10 @@ const SPREAD_OPTIONS = [
 ];
 
 function clock(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return new Date(iso).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 // "drafted" is a synthetic filter (new leads with an unsent draft), not a real
@@ -66,6 +77,7 @@ export function LeadsView({
   // Anchor for shift-click range selection (index into the filtered list).
   const lastClickRef = useRef<number | null>(null);
   const router = useRouter();
+  const { ask, confirmEl } = useInlineConfirm();
 
   // --- Send queue: poll while anything is queued and drain what is due. The
   // cron route does the same on a schedule, so closing the tab is fine.
@@ -82,7 +94,9 @@ export function LeadsView({
       }
     } catch (e) {
       // Usually transient (next tick retries), but say so rather than hide it.
-      setMsg(`Send queue check failed: ${e instanceof Error ? e.message : "request failed"}`);
+      setMsg(
+        `Send queue check failed: ${e instanceof Error ? e.message : "request failed"}`,
+      );
     }
   }, [router]);
 
@@ -212,138 +226,156 @@ export function LeadsView({
       setMsg("All selected leads already have a contact email.");
       return;
     }
-    const ok = window.confirm(
+    ask(
       `Look up contact emails for ${needing} lead${
         needing === 1 ? "" : "s"
       } via the configured provider? Each lookup costs one paid credit. Leads that already have an email are skipped.`,
+      () => {
+        setMsg(null);
+        start(async () => {
+          const res = await bulkFindContacts(ids);
+          setMsg(
+            res.error
+              ? `Contact lookup failed: ${res.error}`
+              : `Found ${res.found} contact email${res.found === 1 ? "" : "s"}${
+                  res.notFound ? `, ${res.notFound} not found` : ""
+                }${res.skipped ? `, ${res.skipped} already had one` : ""}.`,
+          );
+          setSelected(new Set());
+          router.refresh();
+        });
+      },
     );
-    if (!ok) return;
-    setMsg(null);
-    start(async () => {
-      const res = await bulkFindContacts(ids);
-      setMsg(
-        res.error
-          ? `Contact lookup failed: ${res.error}`
-          : `Found ${res.found} contact email${res.found === 1 ? "" : "s"}${
-              res.notFound ? `, ${res.notFound} not found` : ""
-            }${res.skipped ? `, ${res.skipped} already had one` : ""}.`,
-      );
-      setSelected(new Set());
-      router.refresh();
-    });
   }
 
   /** Find contacts, then draft one email per contact, for each selected lead. */
   function runBulkEnrich() {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    const ok = window.confirm(
+    ask(
       `Find contacts and draft outreach for ${ids.length} lead${
         ids.length === 1 ? "" : "s"
       }? Contact finding uses the web-search models plus one paid Hunter lookup per lead where needed.`,
+      () => {
+        setMsg(null);
+        start(async () => {
+          let done = 0;
+          let contacts = 0;
+          let drafts = 0;
+          let errors = 0;
+          const todo = [...ids];
+          async function worker() {
+            for (;;) {
+              const id = todo.shift();
+              if (!id) return;
+              const res = await enrichLead(id);
+              done += 1;
+              contacts += res.contactsWithEmail;
+              drafts += res.draftsCreated;
+              if (res.error) errors += 1;
+              setProgress(
+                `Preparing ${done} of ${ids.length}: ${contacts} contacts with email, ${drafts} drafts so far…`,
+              );
+            }
+          }
+          await Promise.all([worker(), worker()]);
+          setProgress(null);
+          setMsg(
+            `Ready to send: ${drafts} draft${drafts === 1 ? "" : "s"} across ${ids.length} lead${
+              ids.length === 1 ? "" : "s"
+            } (${contacts} contacts with email${errors ? `, ${errors} lead${errors === 1 ? "" : "s"} had a problem` : ""}). Select them and press Send.`,
+          );
+          router.refresh();
+        });
+      },
     );
-    if (!ok) return;
-    setMsg(null);
-    start(async () => {
-      let done = 0;
-      let contacts = 0;
-      let drafts = 0;
-      let errors = 0;
-      const todo = [...ids];
-      async function worker() {
-        for (;;) {
-          const id = todo.shift();
-          if (!id) return;
-          const res = await enrichLead(id);
-          done += 1;
-          contacts += res.contactsWithEmail;
-          drafts += res.draftsCreated;
-          if (res.error) errors += 1;
-          setProgress(`Preparing ${done} of ${ids.length}: ${contacts} contacts with email, ${drafts} drafts so far…`);
-        }
-      }
-      await Promise.all([worker(), worker()]);
-      setProgress(null);
-      setMsg(
-        `Ready to send: ${drafts} draft${drafts === 1 ? "" : "s"} across ${ids.length} lead${
-          ids.length === 1 ? "" : "s"
-        } (${contacts} contacts with email${errors ? `, ${errors} lead${errors === 1 ? "" : "s"} had a problem` : ""}). Select them and press Send.`,
-      );
-      router.refresh();
-    });
   }
 
   /** Queue every unsent draft on the selected leads, spread over the chosen window. */
   function runBulkSend() {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    const label = SPREAD_OPTIONS.find((o) => o.value === spread)?.label ?? `over ${spread} min`;
-    const ok = window.confirm(
+    const label =
+      SPREAD_OPTIONS.find((o) => o.value === spread)?.label ??
+      `over ${spread} min`;
+    ask(
       `Send every unsent draft on ${ids.length} lead${
         ids.length === 1 ? "" : "s"
       } from the connected Gmail, spread ${label}? Each email goes to its contact individually and starts its follow-up sequence. Leads without a draft are skipped.`,
+      () => {
+        setMsg(null);
+        start(async () => {
+          let res: Awaited<ReturnType<typeof queueSendForLeads>>;
+          try {
+            res = await queueSendForLeads(ids, spread);
+          } catch (e) {
+            setMsg(
+              `Could not queue: ${e instanceof Error ? e.message : "request failed"}`,
+            );
+            return;
+          }
+          if (res.error) {
+            setMsg(`Could not queue: ${res.error}`);
+          } else if (res.queued === 0) {
+            setMsg(
+              `Nothing to send: no unsent drafts with a contact email on the selected leads${
+                res.skipped
+                  ? ` (${res.skipped} draft${res.skipped === 1 ? "" : "s"} lack a valid email)`
+                  : ""
+              }. Use "Find contacts + draft" first.`,
+            );
+          } else {
+            setMsg(
+              `Queued ${res.queued} email${res.queued === 1 ? "" : "s"}; the last one goes out around ${
+                res.finishesAt ? clock(res.finishesAt) : "soon"
+              }${res.skipped ? `. ${res.skipped} skipped for missing email` : ""}.`,
+            );
+          }
+          setSelected(new Set());
+          await refreshQueue();
+          router.refresh();
+        });
+      },
     );
-    if (!ok) return;
-    setMsg(null);
-    start(async () => {
-      let res: Awaited<ReturnType<typeof queueSendForLeads>>;
-      try {
-        res = await queueSendForLeads(ids, spread);
-      } catch (e) {
-        setMsg(`Could not queue: ${e instanceof Error ? e.message : "request failed"}`);
-        return;
-      }
-      if (res.error) {
-        setMsg(`Could not queue: ${res.error}`);
-      } else if (res.queued === 0) {
-        setMsg(
-          `Nothing to send: no unsent drafts with a contact email on the selected leads${
-            res.skipped ? ` (${res.skipped} draft${res.skipped === 1 ? "" : "s"} lack a valid email)` : ""
-          }. Use "Find contacts + draft" first.`,
-        );
-      } else {
-        setMsg(
-          `Queued ${res.queued} email${res.queued === 1 ? "" : "s"}; the last one goes out around ${
-            res.finishesAt ? clock(res.finishesAt) : "soon"
-          }${res.skipped ? `. ${res.skipped} skipped for missing email` : ""}.`,
-        );
-      }
-      setSelected(new Set());
-      await refreshQueue();
-      router.refresh();
-    });
   }
 
   function runCancelQueue() {
-    if (!window.confirm("Pull every queued email back to draft? Nothing more will be sent.")) return;
-    start(async () => {
-      const res = await cancelSendQueue();
-      setMsg(`Cancelled ${res.cancelled} queued email${res.cancelled === 1 ? "" : "s"}.`);
-      await refreshQueue();
-      router.refresh();
-    });
+    ask(
+      "Pull every queued email back to draft? Nothing more will be sent.",
+      () => {
+        start(async () => {
+          const res = await cancelSendQueue();
+          setMsg(
+            `Cancelled ${res.cancelled} queued email${res.cancelled === 1 ? "" : "s"}.`,
+          );
+          await refreshQueue();
+          router.refresh();
+        });
+      },
+    );
   }
 
   function runBulkDelete() {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    const ok = window.confirm(
+    ask(
       `Permanently delete ${ids.length} lead${
         ids.length === 1 ? "" : "s"
       }? This also removes their contacts, outreach, and bookings. This cannot be undone.`,
+      () => {
+        setMsg(null);
+        start(async () => {
+          const res = await bulkDeleteLeads(ids);
+          setMsg(
+            res.error
+              ? `Delete failed: ${res.error}`
+              : `Deleted ${res.deleted} lead${res.deleted === 1 ? "" : "s"}.`,
+          );
+          setSelected(new Set());
+          router.refresh();
+        });
+      },
     );
-    if (!ok) return;
-    setMsg(null);
-    start(async () => {
-      const res = await bulkDeleteLeads(ids);
-      setMsg(
-        res.error
-          ? `Delete failed: ${res.error}`
-          : `Deleted ${res.deleted} lead${res.deleted === 1 ? "" : "s"}.`,
-      );
-      setSelected(new Set());
-      router.refresh();
-    });
   }
 
   const selectClass =
@@ -414,12 +446,16 @@ export function LeadsView({
         </div>
       )}
 
+      {confirmEl}
+
       {/* Bulk action bar */}
       {selected.size > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
           <span className="text-blue-800">
             {selected.size} selected
-            <span className="ml-2 text-xs text-blue-600">(shift-click to select a range)</span>
+            <span className="ml-2 text-xs text-blue-600">
+              (shift-click to select a range)
+            </span>
           </span>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -448,7 +484,9 @@ export function LeadsView({
               disabled={pending}
               className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
             >
-              {pending ? "Working…" : `Find Contacts + Draft for ${selected.size}`}
+              {pending
+                ? "Working…"
+                : `Find Contacts + Draft for ${selected.size}`}
             </button>
             <span className="inline-flex items-center overflow-hidden rounded-md border border-emerald-600">
               <button
@@ -516,7 +554,10 @@ export function LeadsView({
               <tr>
                 <td colSpan={9} className="text-center text-zinc-500">
                   No leads match. Run{" "}
-                  <Link href="/admin/discover" className="text-blue-600 hover:underline">
+                  <Link
+                    href="/admin/discover"
+                    className="text-blue-600 hover:underline"
+                  >
                     Discover
                   </Link>{" "}
                   to add some.
@@ -548,9 +589,7 @@ export function LeadsView({
                   <td>
                     <TypeBadge type={r.type} />
                   </td>
-                  <td className="text-zinc-600">
-                    {r.location_country ?? "—"}
-                  </td>
+                  <td className="text-zinc-600">{r.location_country ?? "—"}</td>
                   <td>
                     <StatusBadge status={r.status} />
                   </td>

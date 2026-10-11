@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { relookupContact } from "@/app/actions/contacts";
+import { useInlineConfirm } from "@/components/InlineConfirm";
 
 /**
  * Shown on a contact that already has an email, so the operator can replace a
@@ -19,21 +20,20 @@ export function ContactRelookup({
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const router = useRouter();
+  const { ask, confirmEl } = useInlineConfirm();
 
   function relookup() {
-    if (
-      !window.confirm(
-        `Look up a fresh contact via ${providerName} and replace this one? This uses one paid lookup.`,
-      )
-    ) {
-      return;
-    }
-    setError(null);
-    start(async () => {
-      const res = await relookupContact(contactId);
-      if (res.error) setError(res.error);
-      router.refresh();
-    });
+    ask(
+      `Look up a fresh contact via ${providerName} and replace this one? This uses one paid lookup.`,
+      () => {
+        setError(null);
+        start(async () => {
+          const res = await relookupContact(contactId);
+          if (res.error) setError(res.error);
+          router.refresh();
+        });
+      },
+    );
   }
 
   return (
@@ -47,6 +47,7 @@ export function ContactRelookup({
           ? "Looking up…"
           : `Email bouncing? Replace via ${providerName}`}
       </button>
+      {confirmEl && <div className="mt-2">{confirmEl}</div>}
       {error && <p className="mt-1 text-xs text-rose-700">{error}</p>}
     </div>
   );

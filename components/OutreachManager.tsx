@@ -11,7 +11,12 @@ import {
   updateDraft,
 } from "@/app/actions/outreach";
 import type { Contact, Outreach } from "@/lib/types";
-import { formatDateTime, looksLikeRealEmail, pickPrimaryContact } from "@/lib/utils";
+import {
+  formatDateTime,
+  looksLikeRealEmail,
+  pickPrimaryContact,
+} from "@/lib/utils";
+import { useInlineConfirm } from "@/components/InlineConfirm";
 
 interface Buf {
   subject: string;
@@ -37,6 +42,7 @@ export function OutreachManager({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+  const { ask, confirmEl } = useInlineConfirm();
 
   function clearMsgs() {
     setMessage(null);
@@ -100,7 +106,10 @@ export function OutreachManager({
     clearMsgs();
     setBusyId("all");
     start(async () => {
-      const res = await draftForAllContacts(leadId, newOneOff.trim() || undefined);
+      const res = await draftForAllContacts(
+        leadId,
+        newOneOff.trim() || undefined,
+      );
       setBusyId(null);
       if (res.error) {
         setError(res.error);
@@ -118,54 +127,59 @@ export function OutreachManager({
     const recipients = sendable
       .map((o) => contacts.find((c) => c.id === o.contact_id)?.email)
       .join("\n");
-    if (
-      !window.confirm(
-        `Send ${sendable.length} separate emails to:\n\n${recipients}\n\nEach person gets their own message.`,
-      )
-    ) {
-      return;
-    }
-    clearMsgs();
-    setBusyId("sendAll");
-    start(async () => {
-      // Persist unsaved edits first so we send exactly what's shown.
-      for (const item of sendable) {
-        const buf = getBuf(item);
-        if (buf.subject !== item.subject || buf.body !== item.body) {
-          const upd = await updateDraft(item.id, buf.subject, buf.body);
-          if (upd.error) {
-            setBusyId(null);
-            setError(upd.error);
-            return;
+    ask(
+      `Send ${sendable.length} separate emails to:\n\n${recipients}\n\nEach person gets their own message.`,
+      () => {
+        clearMsgs();
+        setBusyId("sendAll");
+        start(async () => {
+          // Persist unsaved edits first so we send exactly what's shown.
+          for (const item of sendable) {
+            const buf = getBuf(item);
+            if (buf.subject !== item.subject || buf.body !== item.body) {
+              const upd = await updateDraft(item.id, buf.subject, buf.body);
+              if (upd.error) {
+                setBusyId(null);
+                setError(upd.error);
+                return;
+              }
+            }
           }
-        }
-      }
-      // One request per email. A single server action that loops over every
-      // draft gets killed by the hosting function time limit after a couple
-      // of sends, which left the rest unsent with no error shown.
-      let sent = 0;
-      const errors: string[] = [];
-      try {
-        for (const item of sendable) {
-          const email = contacts.find((c) => c.id === item.contact_id)?.email ?? "?";
-          setMessage(`Sending ${sent + errors.length + 1} of ${sendable.length}: ${email}…`);
-          const res = await approveAndSend(item.id);
-          if (res.error) errors.push(`${email}: ${res.error}`);
-          else sent += 1;
-        }
-      } catch (e) {
-        errors.push(e instanceof Error ? e.message : "Send request failed.");
-      }
-      setBusyId(null);
-      setBufs({});
-      if (errors.length > 0) {
-        setMessage(null);
-        setError(`Sent ${sent}, ${errors.length} failed: ${errors.join("; ")}`);
-      } else {
-        setMessage(`Sent ${sent} emails ✓ Lead advanced to Reached out.`);
-      }
-      router.refresh();
-    });
+          // One request per email. A single server action that loops over every
+          // draft gets killed by the hosting function time limit after a couple
+          // of sends, which left the rest unsent with no error shown.
+          let sent = 0;
+          const errors: string[] = [];
+          try {
+            for (const item of sendable) {
+              const email =
+                contacts.find((c) => c.id === item.contact_id)?.email ?? "?";
+              setMessage(
+                `Sending ${sent + errors.length + 1} of ${sendable.length}: ${email}…`,
+              );
+              const res = await approveAndSend(item.id);
+              if (res.error) errors.push(`${email}: ${res.error}`);
+              else sent += 1;
+            }
+          } catch (e) {
+            errors.push(
+              e instanceof Error ? e.message : "Send request failed.",
+            );
+          }
+          setBusyId(null);
+          setBufs({});
+          if (errors.length > 0) {
+            setMessage(null);
+            setError(
+              `Sent ${sent}, ${errors.length} failed: ${errors.join("; ")}`,
+            );
+          } else {
+            setMessage(`Sent ${sent} emails ✓ Lead advanced to Reached out.`);
+          }
+          router.refresh();
+        });
+      },
+    );
   }
 
   function save(item: Outreach) {
@@ -189,7 +203,10 @@ export function OutreachManager({
     clearMsgs();
     setBusyId(item.id);
     start(async () => {
-      const res = await regenerateDraft(item.id, oneOffs[item.id]?.trim() || undefined);
+      const res = await regenerateDraft(
+        item.id,
+        oneOffs[item.id]?.trim() || undefined,
+      );
       setBusyId(null);
       if (res.error) {
         setError(res.error);
@@ -301,6 +318,7 @@ export function OutreachManager({
         )}
       </div>
 
+      {confirmEl}
       {message && (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
           {message}
@@ -332,8 +350,9 @@ export function OutreachManager({
       {/* Outreach history */}
       {outreach.length === 0 ? (
         <p className="text-sm text-zinc-500">
-          No outreach yet. Click <span className="font-medium">Draft Outreach</span>{" "}
-          to generate a tailored email.
+          No outreach yet. Click{" "}
+          <span className="font-medium">Draft Outreach</span> to generate a
+          tailored email.
         </p>
       ) : (
         <div className="space-y-3">
