@@ -1,5 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getEnv, requireEnv } from "@/lib/env";
+import { stripCitationTags } from "@/lib/claude/sanitize";
+
+export { stripCitationTags };
 
 // High-powered model — reserved for the work that justifies the cost: org
 // research and outreach drafting (both via generateWithWebSearch).
@@ -55,13 +58,14 @@ Strong speaking themes:
 
 Good-fit venues: universities and colleges (civic engagement, political science, public policy, leadership programs), think tanks and policy institutes, world-affairs councils, corporate and association keynotes, leadership and ethics forums, bipartisan/civility-focused conferences, and faith-and-public-life events.`;
 
-/** Concatenate all text blocks from a Claude message. */
+/** Concatenate all text blocks from a Claude message, citation markup removed. */
 export function extractText(message: Anthropic.Message): string {
-  return message.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
+  return stripCitationTags(
+    message.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("\n"),
+  ).trim();
 }
 
 /**

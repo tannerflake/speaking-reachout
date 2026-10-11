@@ -1,6 +1,7 @@
 import { google } from "googleapis";
 import { createOAuthClient } from "@/lib/gmail/oauth";
 import { getGmailConnection, saveGmailTokens } from "@/lib/gmail/connection";
+import { stripCitationTags } from "@/lib/claude/sanitize";
 
 export class GmailNotConnectedError extends Error {
   constructor() {
@@ -36,11 +37,15 @@ export async function sendGmail(params: {
   };
 }): Promise<SendResult> {
   const { gmail, conn } = await getGmailClient();
+  // Last line of defense: model citation markup must never reach a recipient,
+  // even if a draft was stored before the generators learned to strip it.
+  const subject = stripCitationTags(params.subject).trim();
+  const body = stripCitationTags(params.body).trim();
   const raw = buildRawMessage({
     to: params.to,
     from: conn.email ?? undefined,
-    subject: params.subject,
-    body: params.body,
+    subject,
+    body,
     inReplyTo: params.thread?.inReplyTo ?? undefined,
     references: params.thread?.references,
   });
