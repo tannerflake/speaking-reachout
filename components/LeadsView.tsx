@@ -56,6 +56,31 @@ const STATUS_FILTER_KEY = "leads:statusFilter";
 const SOURCE_FILTER_KEY = "leads:sourceFilter";
 // Who started the conversation (commission): app / gmail / nothing sent yet.
 const ORIGIN_FILTER_KEY = "leads:originFilter";
+// Last-activity date range, stored as "YYYY-MM-DD" strings (empty = open end).
+const DATE_FROM_KEY = "leads:dateFrom";
+const DATE_TO_KEY = "leads:dateTo";
+
+/** Local calendar date as "YYYY-MM-DD" (what <input type="date"> uses). */
+function toDateInput(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function daysAgo(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return toDateInput(d);
+}
+
+// Quick presets for the date range; "to" is left open so new activity keeps
+// showing up without touching the filter.
+const DATE_PRESETS = [
+  { label: "7d", days: 7 },
+  { label: "30d", days: 30 },
+  { label: "90d", days: 90 },
+];
 
 export function LeadsView({
   rows,
@@ -68,6 +93,8 @@ export function LeadsView({
   const [source, setSource] = useState<string>("");
   const [origin, setOrigin] = useState<string>("");
   const [search, setSearch] = useState<string>("");
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -124,6 +151,10 @@ export function LeadsView({
     if (savedSource) setSource(savedSource);
     const savedOrigin = localStorage.getItem(ORIGIN_FILTER_KEY);
     if (savedOrigin) setOrigin(savedOrigin);
+    const savedFrom = localStorage.getItem(DATE_FROM_KEY);
+    if (savedFrom) setDateFrom(savedFrom);
+    const savedTo = localStorage.getItem(DATE_TO_KEY);
+    if (savedTo) setDateTo(savedTo);
   }, [initialStatus]);
 
   function changeStatus(value: string) {
@@ -141,9 +172,26 @@ export function LeadsView({
     localStorage.setItem(ORIGIN_FILTER_KEY, value);
   }
 
+  function changeDateRange(from: string, to: string) {
+    setDateFrom(from);
+    setDateTo(to);
+    localStorage.setItem(DATE_FROM_KEY, from);
+    localStorage.setItem(DATE_TO_KEY, to);
+  }
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
+    // Date inputs are local calendar days; compare against the start of the
+    // "from" day and the end of the "to" day so both ends are inclusive.
+    const fromMs = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null;
+    const toMs = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : null;
     return rows.filter((r) => {
+      if (fromMs !== null || toMs !== null) {
+        const t = new Date(r.lastActivity).getTime();
+        if (Number.isNaN(t)) return false;
+        if (fromMs !== null && t < fromMs) return false;
+        if (toMs !== null && t > toMs) return false;
+      }
       if (status === "drafted") {
         if (!(r.status === "new" && r.hasUnsentDraft)) return false;
       } else if (status && r.status !== status) {
@@ -158,7 +206,7 @@ export function LeadsView({
       if (q && !r.name.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [rows, status, source, origin, search]);
+  }, [rows, status, source, origin, search, dateFrom, dateTo]);
 
   /**
    * Checkbox click. Plain click toggles one row; shift-click selects (or
@@ -425,6 +473,55 @@ export function LeadsView({
           <option value="gmail">Sent from Gmail</option>
           <option value="unsent">Nothing sent yet</option>
         </select>
+        <div
+          className="flex items-center gap-1 text-sm text-zinc-600"
+          role="group"
+          aria-label="Filter by last activity date"
+        >
+          <input
+            type="date"
+            value={dateFrom}
+            max={dateTo || undefined}
+            onChange={(e) => changeDateRange(e.target.value, dateTo)}
+            aria-label="Last activity from"
+            className={selectClass}
+          />
+          <span className="text-zinc-400">–</span>
+          <input
+            type="date"
+            value={dateTo}
+            min={dateFrom || undefined}
+            onChange={(e) => changeDateRange(dateFrom, e.target.value)}
+            aria-label="Last activity to"
+            className={selectClass}
+          />
+          {DATE_PRESETS.map((p) => {
+            const active = dateFrom === daysAgo(p.days) && dateTo === "";
+            return (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => changeDateRange(daysAgo(p.days), "")}
+                className={`rounded-md border px-2 py-1 text-xs ${
+                  active
+                    ? "border-blue-500 bg-blue-50 text-blue-700"
+                    : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50"
+                }`}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+          {(dateFrom || dateTo) && (
+            <button
+              type="button"
+              onClick={() => changeDateRange("", "")}
+              className="px-1 text-xs text-zinc-500 hover:text-zinc-800"
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Send queue status */}
