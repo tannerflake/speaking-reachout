@@ -113,9 +113,16 @@ export async function generateWithWebSearch(opts: {
     { role: "user", content: opts.userPrompt },
   ];
 
+  // Deliberately the basic web-search tool, not the newer
+  // `web_search_20260209` "dynamic filtering" variant. That variant routes
+  // searches through a code-execution sandbox; in practice the model batched
+  // all of its searches into one sandbox call, exhausted `max_uses` at once,
+  // then spent minutes retrying before answering in prose instead of JSON.
+  // The same contact-research prompt took ~194s and failed on the new tool
+  // versus ~36s with valid JSON on this one (measured 2026-10-11).
   const tools = [
     {
-      type: "web_search_20260209" as const,
+      type: "web_search_20250305" as const,
       name: "web_search" as const,
       max_uses: opts.maxSearches ?? 8,
     },
