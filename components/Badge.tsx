@@ -103,6 +103,41 @@ export function ContactGapBadge({
   );
 }
 
+/**
+ * Draft coverage for a lead's emailable contacts. Renders nothing when there
+ * is no usable email (ContactGapBadge covers that case) or when every
+ * emailable contact already has an email sent and nothing is left in draft.
+ */
+export function DraftGapBadge({
+  emailableContacts,
+  draftedContacts,
+  hasUnsentDraft,
+}: {
+  emailableContacts: number;
+  draftedContacts: number;
+  hasUnsentDraft: boolean;
+}) {
+  if (emailableContacts === 0) return null;
+  if (draftedContacts === 0) {
+    return (
+      <Pill className="border-rose-200 bg-rose-50 text-rose-700">No draft</Pill>
+    );
+  }
+  if (draftedContacts < emailableContacts) {
+    return (
+      <Pill className="border-amber-200 bg-amber-50 text-amber-700">
+        Partial drafts
+      </Pill>
+    );
+  }
+  if (!hasUnsentDraft) return null;
+  return (
+    <Pill className="border-emerald-200 bg-emerald-50 text-emerald-700">
+      Drafted
+    </Pill>
+  );
+}
+
 export function TypeBadge({ type }: { type: string }) {
   return (
     <Pill className="border-zinc-200 bg-zinc-50 text-zinc-600">{type}</Pill>

@@ -16,7 +16,7 @@ export default async function AdminLayout({
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-2.5">
+        <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4 px-6 py-2.5">
           <div className="flex items-center gap-4">
             <Link href="/admin" className="text-sm font-semibold text-zinc-900">
               {me.role === "editor" ? "Site Editor" : "Speaker Outreach CRM"}
@@ -37,7 +37,7 @@ export default async function AdminLayout({
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
+      <main className="mx-auto max-w-[1800px] px-6 py-6">{children}</main>
     </div>
   );
 }

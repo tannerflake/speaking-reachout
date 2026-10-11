@@ -25,6 +25,14 @@ export interface LeadListRow extends Lead {
   lastActivity: string;
   /** True when the lead has at least one draft (unsent) outreach. */
   hasUnsentDraft: boolean;
+  /** Contacts with a usable email address. */
+  emailableContacts: number;
+  /**
+   * Of the emailable contacts, how many already have an outreach row (draft,
+   * queued, or sent). Matches the rule draftForAllContacts uses to decide who
+   * still needs a draft.
+   */
+  draftedContacts: number;
   /**
    * Channel of the EARLIEST sent outreach to this lead, or null if nothing has
    * been sent. This is who gets the commission: "app" means the operator
@@ -72,7 +80,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
   let query = supabase
     .from("leads")
     .select(
-      "*, contacts(email), interactions(created_at), outreach(status, sent_via, sent_at)",
+      "*, contacts(id, email), interactions(created_at), outreach(status, sent_via, sent_at, contact_id)",
     )
     .order("created_at", { ascending: false });
 
@@ -83,12 +91,13 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
 
   const { data } = await query;
   type Row = Lead & {
-    contacts: { email: string | null }[];
+    contacts: { id: string; email: string | null }[];
     interactions: { created_at: string }[];
     outreach: {
       status: string;
       sent_via: OutreachChannel;
       sent_at: string | null;
+      contact_id: string | null;
     }[];
   };
   return ((data as Row[]) ?? []).map((row) => {
@@ -102,10 +111,16 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
       ? new Date(Math.max(...activityTimes)).toISOString()
       : row.updated_at;
     const contacts = row.contacts ?? [];
+    const emailable = contacts.filter((c) => looksLikeRealEmail(c.email));
+    const covered = new Set(
+      (row.outreach ?? []).map((o) => o.contact_id).filter(Boolean) as string[],
+    );
     return {
       ...row,
       contactsCount: contacts.length,
-      hasContactEmail: contacts.some((c) => looksLikeRealEmail(c.email)),
+      hasContactEmail: emailable.length > 0,
+      emailableContacts: emailable.length,
+      draftedContacts: emailable.filter((c) => covered.has(c.id)).length,
       lastActivity: last,
       hasUnsentDraft: (row.outreach ?? []).some((o) => o.status === "draft"),
       originatedVia: firstSent?.sent_via ?? null,

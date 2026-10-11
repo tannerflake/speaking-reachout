@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ContactGapBadge,
+  DraftGapBadge,
   OriginBadge,
   SourceBadge,
   StatusBadge,
@@ -499,13 +500,14 @@ export function LeadsView({
               <th>Status</th>
               <th>Sent by</th>
               <th>Contacts</th>
+              <th>Drafts</th>
               <th>Last activity</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={8} className="text-center text-zinc-500">
+                <td colSpan={9} className="text-center text-zinc-500">
                   No leads match. Run{" "}
                   <Link href="/admin/discover" className="text-blue-600 hover:underline">
                     Discover
@@ -560,6 +562,22 @@ export function LeadsView({
                         hasContactEmail={r.hasContactEmail}
                       />
                     </div>
+                  </td>
+                  <td className="text-zinc-600">
+                    {r.emailableContacts === 0 ? (
+                      <span className="text-zinc-400">—</span>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span>
+                          {r.draftedContacts}/{r.emailableContacts}
+                        </span>
+                        <DraftGapBadge
+                          emailableContacts={r.emailableContacts}
+                          draftedContacts={r.draftedContacts}
+                          hasUnsentDraft={r.hasUnsentDraft}
+                        />
+                      </div>
+                    )}
                   </td>
                   <td className="text-zinc-500">
                     {formatDateTime(r.lastActivity)}
