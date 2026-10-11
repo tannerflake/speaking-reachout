@@ -7,7 +7,6 @@ import {
   approveAndSend,
   draftForAllContacts,
   generateDraft,
-  sendAllDrafts,
   regenerateDraft,
   updateDraft,
 } from "@/app/actions/outreach";
@@ -141,13 +140,29 @@ export function OutreachManager({
           }
         }
       }
-      const res = await sendAllDrafts(leadId);
+      // One request per email. A single server action that loops over every
+      // draft gets killed by the hosting function time limit after a couple
+      // of sends, which left the rest unsent with no error shown.
+      let sent = 0;
+      const errors: string[] = [];
+      try {
+        for (const item of sendable) {
+          const email = contacts.find((c) => c.id === item.contact_id)?.email ?? "?";
+          setMessage(`Sending ${sent + errors.length + 1} of ${sendable.length}: ${email}…`);
+          const res = await approveAndSend(item.id);
+          if (res.error) errors.push(`${email}: ${res.error}`);
+          else sent += 1;
+        }
+      } catch (e) {
+        errors.push(e instanceof Error ? e.message : "Send request failed.");
+      }
       setBusyId(null);
       setBufs({});
-      if (res.failed > 0) {
-        setError(`Sent ${res.sent}, ${res.failed} failed: ${res.errors.join("; ")}`);
+      if (errors.length > 0) {
+        setMessage(null);
+        setError(`Sent ${sent}, ${errors.length} failed: ${errors.join("; ")}`);
       } else {
-        setMessage(`Sent ${res.sent} emails ✓ Lead advanced to Reached out.`);
+        setMessage(`Sent ${sent} emails ✓ Lead advanced to Reached out.`);
       }
       router.refresh();
     });

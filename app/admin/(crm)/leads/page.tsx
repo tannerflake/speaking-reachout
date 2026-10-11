@@ -4,6 +4,9 @@ import { LeadsView } from "@/components/LeadsView";
 import { ScanEmailButton } from "@/components/ScanEmailButton";
 
 export const dynamic = "force-dynamic";
+// Server actions invoked from this page (bulk draft, contact lookup, send
+// queue) inherit this limit; the default is only 10s.
+export const maxDuration = 300;
 
 export default async function LeadsPage({
   searchParams,

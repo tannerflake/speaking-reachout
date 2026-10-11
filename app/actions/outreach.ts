@@ -175,7 +175,9 @@ export async function queueSendForLeads(
 /** Send whatever is due in the queue (called by the Leads page while open). */
 export async function drainSendQueue(): Promise<DrainResult> {
   const supabase = await createClient();
-  const res = await sendDueQueued(supabase, 10);
+  // Small batches: this runs inside a page request, which has a much shorter
+  // time limit than the cron route. The 20s poll picks up the rest.
+  const res = await sendDueQueued(supabase, 3);
   if (res.sent || res.failed) {
     revalidatePath("/admin/leads");
     revalidatePath("/admin");

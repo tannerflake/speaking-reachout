@@ -80,8 +80,9 @@ export function LeadsView({
           router.refresh();
         }
       }
-    } catch {
-      // transient; next tick retries
+    } catch (e) {
+      // Usually transient (next tick retries), but say so rather than hide it.
+      setMsg(`Send queue check failed: ${e instanceof Error ? e.message : "request failed"}`);
     }
   }, [router]);
 
@@ -285,7 +286,13 @@ export function LeadsView({
     if (!ok) return;
     setMsg(null);
     start(async () => {
-      const res = await queueSendForLeads(ids, spread);
+      let res: Awaited<ReturnType<typeof queueSendForLeads>>;
+      try {
+        res = await queueSendForLeads(ids, spread);
+      } catch (e) {
+        setMsg(`Could not queue: ${e instanceof Error ? e.message : "request failed"}`);
+        return;
+      }
       if (res.error) {
         setMsg(`Could not queue: ${res.error}`);
       } else if (res.queued === 0) {
