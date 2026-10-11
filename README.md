@@ -212,6 +212,12 @@ Apply `supabase/migrations/0020_followups.sql` before using this.
   follows whoever started the conversation. Apply
   `supabase/migrations/0021_outreach_sent_via.sql` first; it also back-fills
   the imported fall 2026 campaign as `gmail`.
+- **No repeated paid lookups** → `contacts.email_lookup_attempted_at` records
+  when Hunter was asked about a person. The enrich pass sets it for every
+  contact it tried, and "Find email via hunter" refuses to repeat a lookup
+  that was already made (the button becomes "Check hunter again anyway").
+  Apply `supabase/migrations/0023_contact_lookup_attempted.sql` **before**
+  deploying this; contact inserts write the column.
 
 ---
 

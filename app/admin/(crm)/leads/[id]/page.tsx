@@ -194,6 +194,7 @@ export default async function LeadDetailPage({
                         canResolve={canResolve}
                         providerName={resolverName}
                         website={lead.website}
+                        lookupAttemptedAt={c.email_lookup_attempted_at ?? null}
                       />
                     )}
                   </li>

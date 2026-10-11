@@ -9,22 +9,27 @@ export function ContactEmail({
   canResolve,
   providerName,
   website,
+  lookupAttemptedAt,
 }: {
   contactId: string;
   /** A paid provider is configured AND the lead has a domain to search. */
   canResolve: boolean;
   providerName: string;
   website: string | null;
+  /** When the paid provider was already asked about this person (null = never). */
+  lookupAttemptedAt: string | null;
 }) {
   const [manual, setManual] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const router = useRouter();
 
-  function find() {
+  const alreadyTried = Boolean(lookupAttemptedAt);
+
+  function find(force: boolean) {
     setError(null);
     start(async () => {
-      const res = await resolveContactEmail(contactId);
+      const res = await resolveContactEmail(contactId, { force });
       if (res.error) setError(res.error);
       router.refresh();
     });
@@ -47,13 +52,29 @@ export function ContactEmail({
     <div className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
       <p className="font-medium">No email yet — resolve it before sending.</p>
 
+      {canResolve && alreadyTried && (
+        <p className="mt-1.5">
+          {providerName} was already checked on{" "}
+          {new Date(lookupAttemptedAt as string).toLocaleDateString()} and found nothing,
+          so no lookup was repeated.
+        </p>
+      )}
+
       {canResolve && (
         <button
-          onClick={find}
+          onClick={() => find(alreadyTried)}
           disabled={pending}
-          className="mt-2 rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+          className={
+            alreadyTried
+              ? "mt-2 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+              : "mt-2 rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+          }
         >
-          {pending ? "Searching…" : `Find email via ${providerName}`}
+          {pending
+            ? "Searching…"
+            : alreadyTried
+              ? `Check ${providerName} again anyway`
+              : `Find email via ${providerName}`}
         </button>
       )}
 

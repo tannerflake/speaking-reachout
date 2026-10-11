@@ -21,7 +21,14 @@ type ContactWithLead = Contact & {
  */
 export async function resolveContactEmail(
   contactId: string,
-): Promise<{ email?: string; provider?: string; error?: string }> {
+  opts: { force?: boolean } = {},
+): Promise<{
+  email?: string;
+  provider?: string;
+  error?: string;
+  /** Set when the lookup was skipped because it had already been made. */
+  alreadyAttemptedAt?: string;
+}> {
   const supabase = await createClient();
   const { data } = await supabase
     .from("contacts")
@@ -43,6 +50,19 @@ export async function resolveContactEmail(
     };
   }
 
+  // Never silently repeat a lookup the enrich pass (or an earlier click)
+  // already made. The operator can still force a re-check.
+  if (contact.email_lookup_attempted_at && !opts.force) {
+    return {
+      provider: resolver.name,
+      alreadyAttemptedAt: contact.email_lookup_attempted_at,
+      error: `${resolver.name} was already checked for this person on ${new Date(
+        contact.email_lookup_attempted_at,
+      ).toLocaleDateString()} and found nothing. Nothing was spent just now.`,
+    };
+  }
+
+  const attemptedAt = new Date().toISOString();
   const result = await resolver.resolve({
     name: contact.lead?.name ?? "",
     website: contact.lead?.website ?? null,
@@ -52,6 +72,11 @@ export async function resolveContactEmail(
   });
 
   if (!result.email || !looksLikeRealEmail(result.email)) {
+    await supabase
+      .from("contacts")
+      .update({ email_lookup_attempted_at: attemptedAt })
+      .eq("id", contactId);
+    revalidatePath(`/admin/leads/${contact.lead_id}`);
     return {
       provider: resolver.name,
       error: `No email found via ${resolver.name}. Add it manually below.`,
@@ -62,6 +87,7 @@ export async function resolveContactEmail(
     email: result.email,
     contact_status: result.contact_status,
     source_url: result.source_url ?? contact.source_url,
+    email_lookup_attempted_at: attemptedAt,
   };
   if (!contact.name && result.name) update.name = result.name;
   if (!contact.role && result.role) update.role = result.role;
@@ -354,6 +380,7 @@ export async function findMultipleContacts(leadId: string): Promise<MultiFindRes
     };
   }
 
+  const now = new Date().toISOString();
   const { error } = await supabase.from("contacts").insert(
     result.contacts.map((c) => ({
       lead_id: lead.id,
@@ -362,6 +389,7 @@ export async function findMultipleContacts(leadId: string): Promise<MultiFindRes
       email: c.email,
       contact_status: c.contact_status,
       source_url: c.source_url,
+      email_lookup_attempted_at: c.lookupAttempted ? now : null,
     })),
   );
   if (error) return { ...empty, error: error.message };
@@ -400,12 +428,17 @@ async function fillMissingEmails(
   const resolver = getContactResolver();
   if (resolver.name === "claude") return 0;
 
-  const targets = contacts.filter((c) => c.name && !looksLikeRealEmail(c.email));
+  // Skip anyone the provider has already been asked about; a repeat lookup
+  // would just return the same "nothing" and must never happen silently.
+  const targets = contacts.filter(
+    (c) => c.name && !looksLikeRealEmail(c.email) && !c.email_lookup_attempted_at,
+  );
   if (targets.length === 0) return 0;
 
   const resolvedLines: string[] = [];
   await Promise.all(
     targets.map(async (c) => {
+      const attemptedAt = new Date().toISOString();
       const result = await resolver.resolve({
         name: lead.name,
         website: lead.website,
@@ -413,11 +446,19 @@ async function fillMissingEmails(
         personName: c.name,
         claudeContact: null,
       });
-      if (!result.email || !looksLikeRealEmail(result.email)) return;
+      if (!result.email || !looksLikeRealEmail(result.email)) {
+        await supabase
+          .from("contacts")
+          .update({ email_lookup_attempted_at: attemptedAt })
+          .eq("id", c.id);
+        c.email_lookup_attempted_at = attemptedAt;
+        return;
+      }
       const update: Record<string, unknown> = {
         email: result.email,
         contact_status: result.contact_status,
         source_url: result.source_url ?? c.source_url,
+        email_lookup_attempted_at: attemptedAt,
       };
       if (!c.role && result.role) update.role = result.role;
       const { error } = await supabase.from("contacts").update(update).eq("id", c.id);

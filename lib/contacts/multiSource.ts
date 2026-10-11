@@ -39,6 +39,8 @@ export interface FoundContact {
   source_url: string | null;
   /** Which providers surfaced this person. */
   sources: ContactSource[];
+  /** True when Hunter's per-person Email Finder was run for this person. */
+  lookupAttempted: boolean;
 }
 
 export interface FindContactsResult {
@@ -448,6 +450,7 @@ export async function findContactsMultiSource(
       contact_status: status,
       source_url: seenOn ?? m.urls[0] ?? null,
       sources: Array.from(m.sources),
+      lookupAttempted: false,
     });
   }
 
@@ -480,6 +483,7 @@ export async function findContactsMultiSource(
           contact_status: "verified",
           source_url: `https://${orgDomain}`,
           sources: ["hunter"],
+          lookupAttempted: true,
         });
       }
     }
@@ -499,6 +503,7 @@ export async function findContactsMultiSource(
     if (missing.length > 0) {
       hunterUsed = true;
       await mapWithConcurrency(missing, 3, async (f) => {
+        f.lookupAttempted = true;
         const hit = await hunterFindPerson(f.name, orgDomain, hunterKey);
         if (!hit || excludeEmails.has(hit.email)) return;
         f.email = hit.email;

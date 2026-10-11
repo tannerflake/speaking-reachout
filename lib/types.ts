@@ -94,6 +94,8 @@ export interface Contact {
   email: string | null;
   contact_status: ContactStatus;
   source_url: string | null;
+  /** When the paid email provider was last asked about this person (null = never). */
+  email_lookup_attempted_at: string | null;
   created_at: string;
 }
 
