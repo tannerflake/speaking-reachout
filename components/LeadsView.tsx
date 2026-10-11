@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -10,13 +10,33 @@ import {
   StatusBadge,
   TypeBadge,
 } from "@/components/Badge";
-import { bulkDraft } from "@/app/actions/outreach";
+import {
+  bulkDraft,
+  cancelSendQueue,
+  drainSendQueue,
+  queueSendForLeads,
+  sendQueueStatus,
+} from "@/app/actions/outreach";
+import { enrichLead } from "@/app/actions/pipeline";
+import type { QueueStatus } from "@/lib/outreach/send";
 import { bulkDeleteLeads } from "@/app/actions/leads";
 import { bulkFindContacts } from "@/app/actions/contacts";
 import { LEAD_STATUSES } from "@/lib/types";
 import type { LeadListRow } from "@/lib/data";
 import type { LeadStatus } from "@/lib/types";
 import { formatDateTime, statusLabel } from "@/lib/utils";
+
+// Send-queue pacing options offered in the bulk bar (minutes to spread over).
+const SPREAD_OPTIONS = [
+  { value: 15, label: "over 15 min" },
+  { value: 30, label: "over 30 min" },
+  { value: 60, label: "over 1 hour" },
+  { value: 120, label: "over 2 hours" },
+];
+
+function clock(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
 
 // "drafted" is a synthetic filter (new leads with an unsent draft), not a real
 // lead status — so the dropdown value is a status OR this sentinel.
@@ -39,7 +59,40 @@ export function LeadsView({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
+  const [spread, setSpread] = useState<number>(60);
+  const [queue, setQueue] = useState<QueueStatus | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
+  // Anchor for shift-click range selection (index into the filtered list).
+  const lastClickRef = useRef<number | null>(null);
   const router = useRouter();
+
+  // --- Send queue: poll while anything is queued and drain what is due. The
+  // cron route does the same on a schedule, so closing the tab is fine.
+  const refreshQueue = useCallback(async () => {
+    try {
+      const status = await sendQueueStatus();
+      setQueue(status);
+      if (status.due > 0) {
+        const res = await drainSendQueue();
+        if (res.sent || res.failed) {
+          setQueue(await sendQueueStatus());
+          router.refresh();
+        }
+      }
+    } catch {
+      // transient; next tick retries
+    }
+  }, [router]);
+
+  useEffect(() => {
+    void refreshQueue();
+  }, [refreshQueue]);
+
+  useEffect(() => {
+    if (!queue || queue.queued === 0) return;
+    const id = setInterval(() => void refreshQueue(), 20_000);
+    return () => clearInterval(id);
+  }, [queue, refreshQueue]);
 
   // Persist the chosen filter so it survives navigating away and back. A status
   // in the URL (e.g. linked from the dashboard) wins and is remembered;
@@ -91,11 +144,34 @@ export function LeadsView({
     });
   }, [rows, status, source, origin, search]);
 
-  function toggle(id: string) {
+  /**
+   * Checkbox click. Plain click toggles one row; shift-click selects (or
+   * clears) every row between the last clicked row and this one, matching the
+   * state the clicked row ends up in.
+   */
+  function handleRowClick(
+    e: React.MouseEvent<HTMLInputElement>,
+    index: number,
+    id: string,
+  ) {
+    const anchor = lastClickRef.current;
+    lastClickRef.current = index;
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const turnOn = !prev.has(id);
+      if (e.shiftKey && anchor !== null && anchor !== index) {
+        const [a, b] = anchor < index ? [anchor, index] : [index, anchor];
+        for (let i = a; i <= b; i += 1) {
+          const rowId = filtered[i]?.id;
+          if (!rowId) continue;
+          if (turnOn) next.add(rowId);
+          else next.delete(rowId);
+        }
+      } else if (turnOn) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
       return next;
     });
   }
@@ -151,6 +227,91 @@ export function LeadsView({
             }${res.skipped ? `, ${res.skipped} already had one` : ""}.`,
       );
       setSelected(new Set());
+      router.refresh();
+    });
+  }
+
+  /** Find contacts, then draft one email per contact, for each selected lead. */
+  function runBulkEnrich() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    const ok = window.confirm(
+      `Find contacts and draft outreach for ${ids.length} lead${
+        ids.length === 1 ? "" : "s"
+      }? Contact finding uses the web-search models plus one paid Hunter lookup per lead where needed.`,
+    );
+    if (!ok) return;
+    setMsg(null);
+    start(async () => {
+      let done = 0;
+      let contacts = 0;
+      let drafts = 0;
+      let errors = 0;
+      const todo = [...ids];
+      async function worker() {
+        for (;;) {
+          const id = todo.shift();
+          if (!id) return;
+          const res = await enrichLead(id);
+          done += 1;
+          contacts += res.contactsWithEmail;
+          drafts += res.draftsCreated;
+          if (res.error) errors += 1;
+          setProgress(`Preparing ${done} of ${ids.length}: ${contacts} contacts with email, ${drafts} drafts so far…`);
+        }
+      }
+      await Promise.all([worker(), worker()]);
+      setProgress(null);
+      setMsg(
+        `Ready to send: ${drafts} draft${drafts === 1 ? "" : "s"} across ${ids.length} lead${
+          ids.length === 1 ? "" : "s"
+        } (${contacts} contacts with email${errors ? `, ${errors} lead${errors === 1 ? "" : "s"} had a problem` : ""}). Select them and press Send.`,
+      );
+      router.refresh();
+    });
+  }
+
+  /** Queue every unsent draft on the selected leads, spread over the chosen window. */
+  function runBulkSend() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    const label = SPREAD_OPTIONS.find((o) => o.value === spread)?.label ?? `over ${spread} min`;
+    const ok = window.confirm(
+      `Send every unsent draft on ${ids.length} lead${
+        ids.length === 1 ? "" : "s"
+      } from the connected Gmail, spread ${label}? Each email goes to its contact individually and starts its follow-up sequence. Leads without a draft are skipped.`,
+    );
+    if (!ok) return;
+    setMsg(null);
+    start(async () => {
+      const res = await queueSendForLeads(ids, spread);
+      if (res.error) {
+        setMsg(`Could not queue: ${res.error}`);
+      } else if (res.queued === 0) {
+        setMsg(
+          `Nothing to send: no unsent drafts with a contact email on the selected leads${
+            res.skipped ? ` (${res.skipped} draft${res.skipped === 1 ? "" : "s"} lack a valid email)` : ""
+          }. Use "Find contacts + draft" first.`,
+        );
+      } else {
+        setMsg(
+          `Queued ${res.queued} email${res.queued === 1 ? "" : "s"}; the last one goes out around ${
+            res.finishesAt ? clock(res.finishesAt) : "soon"
+          }${res.skipped ? `. ${res.skipped} skipped for missing email` : ""}.`,
+        );
+      }
+      setSelected(new Set());
+      await refreshQueue();
+      router.refresh();
+    });
+  }
+
+  function runCancelQueue() {
+    if (!window.confirm("Pull every queued email back to draft? Nothing more will be sent.")) return;
+    start(async () => {
+      const res = await cancelSendQueue();
+      setMsg(`Cancelled ${res.cancelled} queued email${res.cancelled === 1 ? "" : "s"}.`);
+      await refreshQueue();
       router.refresh();
     });
   }
@@ -226,11 +387,33 @@ export function LeadsView({
         </select>
       </div>
 
+      {/* Send queue status */}
+      {queue && queue.queued > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-900">
+          <span>
+            Sending: {queue.queued} queued
+            {queue.nextDueAt ? `, next at ${clock(queue.nextDueAt)}` : ""}
+            {queue.lastDueAt ? `, done around ${clock(queue.lastDueAt)}` : ""}.
+            Keeps going if you close this page.
+          </span>
+          <button
+            onClick={runCancelQueue}
+            disabled={pending}
+            className="rounded-md border border-indigo-300 bg-white px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+          >
+            Cancel remaining
+          </button>
+        </div>
+      )}
+
       {/* Bulk action bar */}
       {selected.size > 0 && (
-        <div className="flex items-center justify-between rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
-          <span className="text-blue-800">{selected.size} selected</span>
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
+          <span className="text-blue-800">
+            {selected.size} selected
+            <span className="ml-2 text-xs text-blue-600">(shift-click to select a range)</span>
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={runBulkDelete}
               disabled={pending}
@@ -248,11 +431,45 @@ export function LeadsView({
             <button
               onClick={runBulkDraft}
               disabled={pending}
+              className="rounded-md border border-blue-300 bg-white px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-60"
+            >
+              {`Draft Only for ${selected.size}`}
+            </button>
+            <button
+              onClick={runBulkEnrich}
+              disabled={pending}
               className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
             >
-              {pending ? "Drafting…" : `Draft Outreach for ${selected.size}`}
+              {pending ? "Working…" : `Find Contacts + Draft for ${selected.size}`}
             </button>
+            <span className="inline-flex items-center overflow-hidden rounded-md border border-emerald-600">
+              <button
+                onClick={runBulkSend}
+                disabled={pending}
+                className="bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+              >
+                {`Send Drafts for ${selected.size}`}
+              </button>
+              <select
+                value={spread}
+                onChange={(e) => setSpread(Number(e.target.value))}
+                disabled={pending}
+                aria-label="Spread sends over"
+                className="border-l border-emerald-700 bg-emerald-50 px-2 py-1.5 text-sm text-emerald-900 focus:outline-none"
+              >
+                {SPREAD_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </span>
           </div>
+        </div>
+      )}
+      {progress && (
+        <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          {progress}
         </div>
       )}
       {msg && (
@@ -297,13 +514,14 @@ export function LeadsView({
                 </td>
               </tr>
             ) : (
-              filtered.map((r) => (
+              filtered.map((r, idx) => (
                 <tr key={r.id}>
                   <td>
                     <input
                       type="checkbox"
                       checked={selected.has(r.id)}
-                      onChange={() => toggle(r.id)}
+                      onChange={() => undefined}
+                      onClick={(e) => handleRowClick(e, idx, r.id)}
                       aria-label={`Select ${r.name}`}
                     />
                   </td>

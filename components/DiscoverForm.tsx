@@ -4,10 +4,22 @@ import { useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { TypeBadge, ContactStatusBadge } from "@/components/Badge";
+import { enrichLead, type EnrichResult } from "@/app/actions/pipeline";
 import type {
   DiscoverySummary,
   InsertedLead,
 } from "@/lib/discovery/persist";
+
+type EnrichState =
+  | { phase: "waiting" }
+  | { phase: "working" }
+  | { phase: "done"; result: EnrichResult }
+  | { phase: "error"; message: string };
+
+// How many leads get contacts + drafts at once. Each is a minute or two of
+// web-search model calls, so two in flight keeps the run moving without
+// hammering the providers.
+const ENRICH_CONCURRENCY = 2;
 
 export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
   const [count, setCount] = useState(5);
@@ -16,14 +28,67 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
   const [leads, setLeads] = useState<InsertedLead[]>([]);
   const [summary, setSummary] = useState<DiscoverySummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [autoEnrich, setAutoEnrich] = useState(true);
+  const [enrich, setEnrich] = useState<Record<string, EnrichState>>({});
+  const [enriching, setEnriching] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  // Leads waiting for contacts + drafts, and how many workers are running.
+  const enrichQueue = useRef<string[]>([]);
+  const enrichActive = useRef(0);
   const router = useRouter();
+
+  /** Pull leads off the enrich queue until it is empty. */
+  function pumpEnrich() {
+    while (
+      enrichActive.current < ENRICH_CONCURRENCY &&
+      enrichQueue.current.length > 0
+    ) {
+      const id = enrichQueue.current.shift() as string;
+      enrichActive.current += 1;
+      setEnriching(true);
+      setEnrich((prev) => ({ ...prev, [id]: { phase: "working" } }));
+      enrichLead(id)
+        .then((result) => {
+          setEnrich((prev) => ({
+            ...prev,
+            [id]: result.error
+              ? { phase: "error", message: result.error }
+              : { phase: "done", result },
+          }));
+        })
+        .catch((e: unknown) => {
+          setEnrich((prev) => ({
+            ...prev,
+            [id]: {
+              phase: "error",
+              message: e instanceof Error ? e.message : "Failed.",
+            },
+          }));
+        })
+        .finally(() => {
+          enrichActive.current -= 1;
+          if (enrichQueue.current.length === 0 && enrichActive.current === 0) {
+            setEnriching(false);
+            router.refresh();
+          }
+          pumpEnrich();
+        });
+    }
+  }
+
+  function scheduleEnrich(id: string) {
+    setEnrich((prev) => ({ ...prev, [id]: { phase: "waiting" } }));
+    enrichQueue.current.push(id);
+    pumpEnrich();
+  }
 
   async function run() {
     setRunning(true);
     setLeads([]);
     setSummary(null);
     setError(null);
+    setEnrich({});
+    enrichQueue.current = [];
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -84,6 +149,9 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
     }
     if (evt.type === "lead" && evt.lead) {
       setLeads((prev) => [...prev, evt.lead as InsertedLead]);
+      // Start finding contacts + drafting the moment the lead lands, while
+      // discovery keeps streaming the rest.
+      if (autoEnrich) scheduleEnrich(evt.lead.id);
     } else if (evt.type === "done" && evt.summary) {
       setSummary(evt.summary);
     } else if (evt.type === "error") {
@@ -131,6 +199,24 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
             </p>
           </div>
         </div>
+
+        <label className="mt-3 flex items-start gap-2 text-sm text-zinc-700">
+          <input
+            type="checkbox"
+            checked={autoEnrich}
+            onChange={(e) => setAutoEnrich(e.target.checked)}
+            disabled={running}
+            className="mt-0.5"
+          />
+          <span>
+            Find contacts and draft outreach for each lead as it is found
+            <span className="block text-xs text-zinc-400">
+              Up to seven contacts per lead from the web-search models, plus one
+              paid Hunter lookup per lead where needed, then one draft per
+              contact. Leads arrive ready to send from the Leads page.
+            </span>
+          </span>
+        </label>
 
         <div className="mt-4 flex items-center gap-3">
           <button
@@ -183,7 +269,11 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <TypeBadge type={l.type} />
-                  <ContactStatusBadge status={l.contact_status} />
+                  {enrich[l.id] ? (
+                    <EnrichPill state={enrich[l.id]} />
+                  ) : (
+                    <ContactStatusBadge status={l.contact_status} />
+                  )}
                 </div>
               </li>
             ))}
@@ -238,20 +328,70 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
               Added {summary.inserted} new lead
               {summary.inserted === 1 ? "" : "s"}.
             </p>
-            <p className="mt-1 text-zinc-600">
-              {summary.needsLookup} need a manual email lookup.
-              {summary.failedBatches > 0 &&
-                ` ${summary.failedBatches} batch(es) failed and were skipped.`}
-            </p>
+            {autoEnrich ? (
+              <p className="mt-1 text-zinc-600">
+                {enriching
+                  ? "Finding contacts and drafting outreach…"
+                  : `${enrichTotals(enrich).drafts} draft${
+                      enrichTotals(enrich).drafts === 1 ? "" : "s"
+                    } ready across ${enrichTotals(enrich).withEmail} contacts with email.`}
+                {summary.failedBatches > 0 &&
+                  ` ${summary.failedBatches} batch(es) failed and were skipped.`}
+              </p>
+            ) : (
+              <p className="mt-1 text-zinc-600">
+                {summary.needsLookup} need a manual email lookup.
+                {summary.failedBatches > 0 &&
+                  ` ${summary.failedBatches} batch(es) failed and were skipped.`}
+              </p>
+            )}
             <Link
-              href="/admin/leads?status=new"
+              href="/admin/leads?status=drafted"
               className="mt-2 inline-block text-blue-600 hover:underline"
             >
-              View new leads →
+              {autoEnrich ? "Review and send →" : "View new leads →"}
             </Link>
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+function enrichTotals(states: Record<string, EnrichState>) {
+  let drafts = 0;
+  let withEmail = 0;
+  for (const st of Object.values(states)) {
+    if (st.phase === "done") {
+      drafts += st.result.draftsCreated;
+      withEmail += st.result.contactsWithEmail;
+    }
+  }
+  return { drafts, withEmail };
+}
+
+function EnrichPill({ state }: { state: EnrichState }) {
+  const base =
+    "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium";
+  if (state.phase === "waiting")
+    return <span className={`${base} border-zinc-200 bg-zinc-50 text-zinc-500`}>Queued</span>;
+  if (state.phase === "working")
+    return (
+      <span className={`${base} border-blue-200 bg-blue-50 text-blue-700`}>
+        Finding contacts + drafting…
+      </span>
+    );
+  if (state.phase === "error")
+    return (
+      <span className={`${base} border-rose-200 bg-rose-50 text-rose-700`} title={state.message}>
+        Needs attention
+      </span>
+    );
+  const r = state.result;
+  return (
+    <span className={`${base} border-emerald-200 bg-emerald-50 text-emerald-700`}>
+      {r.draftsCreated} draft{r.draftsCreated === 1 ? "" : "s"} · {r.contactsWithEmail} email
+      {r.contactsWithEmail === 1 ? "" : "s"}
+    </span>
   );
 }

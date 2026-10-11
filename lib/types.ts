@@ -46,7 +46,7 @@ export type LeadSource = "outbound" | "website_inbound";
 
 export type ContactStatus = "verified" | "unverified" | "needs_lookup";
 
-export type OutreachStatus = "draft" | "sent" | "failed";
+export type OutreachStatus = "draft" | "queued" | "sent" | "failed";
 
 /**
  * How an outreach email left the building: sent by this app, or sent by hand
@@ -111,6 +111,8 @@ export interface Outreach {
   replied_at: string | null;
   bounced_at: string | null;
   sent_via: OutreachChannel;
+  /** When a queued email is due to go out (null unless status is 'queued'). */
+  scheduled_for: string | null;
   /** 0 = initial outreach, 1..n = follow-up number in the thread. */
   sequence_step: number;
   /** The initial outreach this follow-up belongs to (null on step 0). */

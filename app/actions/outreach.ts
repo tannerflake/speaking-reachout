@@ -4,9 +4,15 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveRules, getActiveVoiceInjection, getLead } from "@/lib/data";
 import { generateOutreach } from "@/lib/claude/outreach";
-import { GmailNotConnectedError, sendGmail } from "@/lib/gmail/send";
-import { createAdminClient } from "@/lib/supabase/admin";
-import { startSequence } from "@/lib/followups/run";
+import {
+  getQueueStatus,
+  queueOutreachForLeads,
+  sendDueQueued,
+  sendOutreachRow,
+  type DrainResult,
+  type QueueResult,
+  type QueueStatus,
+} from "@/lib/outreach/send";
 import { looksLikeRealEmail, pickPrimaryContact } from "@/lib/utils";
 import type { Contact, Outreach } from "@/lib/types";
 
@@ -142,92 +148,56 @@ export async function approveAndSend(
   outreachId: string,
 ): Promise<{ error?: string; ok?: boolean }> {
   const supabase = await createClient();
+  const res = await sendOutreachRow(supabase, outreachId);
+  if (res.leadId) revalidatePath(`/admin/leads/${res.leadId}`);
+  revalidatePath("/admin/leads");
+  revalidatePath("/admin");
+  return res.ok ? { ok: true } : { error: res.error };
+}
+
+/**
+ * Bulk send, throttled. Queues every unsent draft with a valid email on the
+ * selected leads, spread over `spreadMinutes` (about one a minute by
+ * default), then returns immediately. The Leads page drains the queue while
+ * it is open and /api/cron/send-queue picks up the rest. EXPLICIT,
+ * operator-confirmed.
+ */
+export async function queueSendForLeads(
+  leadIds: string[],
+  spreadMinutes: number,
+): Promise<QueueResult> {
+  const supabase = await createClient();
+  const res = await queueOutreachForLeads(supabase, leadIds, spreadMinutes);
+  revalidatePath("/admin/leads");
+  return res;
+}
+
+/** Send whatever is due in the queue (called by the Leads page while open). */
+export async function drainSendQueue(): Promise<DrainResult> {
+  const supabase = await createClient();
+  const res = await sendDueQueued(supabase, 10);
+  if (res.sent || res.failed) {
+    revalidatePath("/admin/leads");
+    revalidatePath("/admin");
+  }
+  return res;
+}
+
+export async function sendQueueStatus(): Promise<QueueStatus> {
+  const supabase = await createClient();
+  return getQueueStatus(supabase);
+}
+
+/** Pull every queued email back to draft so nothing more goes out. */
+export async function cancelSendQueue(): Promise<{ cancelled: number }> {
+  const supabase = await createClient();
   const { data } = await supabase
     .from("outreach")
-    .select("*, contact:contacts(*)")
-    .eq("id", outreachId)
-    .single();
-  if (!data) return { error: "Draft not found." };
-
-  const row = data as Outreach & { contact: Contact | null };
-  if (row.status === "sent") return { error: "Already sent." };
-
-  const email = row.contact?.email ?? null;
-  if (!looksLikeRealEmail(email)) {
-    return {
-      error:
-        "No valid contact email on this outreach. Resolve the contact's email before sending.",
-    };
-  }
-
-  try {
-    const result = await sendGmail({
-      to: email as string,
-      subject: row.subject,
-      body: row.body,
-    });
-
-    await supabase
-      .from("outreach")
-      .update({
-        status: "sent",
-        gmail_message_id: result.messageId,
-        gmail_thread_id: result.threadId,
-        sent_at: new Date().toISOString(),
-        error: null,
-      })
-      .eq("id", outreachId);
-
-    // Advance the lead to reached_out (auto-advance per Flow B). Only promote
-    // from 'new' so we never downgrade a later-stage (e.g. booked) lead.
-    await supabase
-      .from("leads")
-      .update({ status: "reached_out" })
-      .eq("id", row.lead_id)
-      .eq("status", "new");
-
-    await supabase.from("interactions").insert({
-      lead_id: row.lead_id,
-      kind: "email_sent",
-      detail: `Sent "${row.subject}" to ${email}.`,
-    });
-
-    // Every initial outreach gets an automated follow-up sequence (up to 3
-    // nudges in the same thread; see lib/followups/cadence.ts). Follow-ups
-    // themselves (sequence_step > 0) never start a new sequence.
-    if ((row.sequence_step ?? 0) === 0) {
-      const sentAt = new Date().toISOString();
-      await startSequence(createAdminClient(), {
-        id: row.id,
-        lead_id: row.lead_id,
-        contact_id: row.contact_id,
-        sent_at: sentAt,
-      });
-      await supabase.from("interactions").insert({
-        lead_id: row.lead_id,
-        kind: "note",
-        detail: `Follow-ups scheduled for ${email}: 3 nudges in the same thread, roughly days 4, 11, and 21, unless they reply first.`,
-      });
-    }
-
-    revalidatePath(`/admin/leads/${row.lead_id}`);
-    revalidatePath("/admin/leads");
-    revalidatePath("/admin/admin");
-    return { ok: true };
-  } catch (e) {
-    const message =
-      e instanceof GmailNotConnectedError
-        ? e.message
-        : e instanceof Error
-          ? e.message
-          : "Send failed.";
-    await supabase
-      .from("outreach")
-      .update({ status: "failed", error: message })
-      .eq("id", outreachId);
-    revalidatePath(`/admin/leads/${row.lead_id}`);
-    return { error: message };
-  }
+    .update({ status: "draft", scheduled_for: null })
+    .eq("status", "queued")
+    .select("id");
+  revalidatePath("/admin/leads");
+  return { cancelled: (data as Array<{ id: string }> | null)?.length ?? 0 };
 }
 
 export async function bulkDraft(

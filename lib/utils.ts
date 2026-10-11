@@ -103,6 +103,7 @@ export function contactStatusLabel(status: ContactStatus): string {
 export function outreachStatusClasses(status: OutreachStatus): string {
   return {
     draft: "bg-zinc-100 text-zinc-700 border-zinc-200",
+    queued: "bg-indigo-50 text-indigo-700 border-indigo-200",
     sent: "bg-emerald-50 text-emerald-700 border-emerald-200",
     failed: "bg-rose-50 text-rose-700 border-rose-200",
   }[status];

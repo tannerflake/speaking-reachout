@@ -42,7 +42,7 @@ export function ContactStatusBadge({ status }: { status: ContactStatus }) {
 }
 
 export function OutreachStatusBadge({ status }: { status: OutreachStatus }) {
-  const label = { draft: "Draft", sent: "Sent", failed: "Failed" }[status];
+  const label = { draft: "Draft", queued: "Queued", sent: "Sent", failed: "Failed" }[status];
   return <Pill className={outreachStatusClasses(status)}>{label}</Pill>;
 }
 

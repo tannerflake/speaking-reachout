@@ -187,6 +187,22 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://<your-domain>/api/cron/foll
 
 Apply `supabase/migrations/0020_followups.sql` before using this.
 
+- **Discover → ready to send** — with "Find contacts and draft outreach"
+  checked (default), the Discover page calls `enrichLead` for each lead the
+  moment it streams in: `findMultipleContacts` (web-search models, then one
+  Hunter domain search for gaps, 7-contact cap) followed by
+  `draftForAllContacts` (one personalized draft per contact with an email).
+  Two leads are enriched at a time; each call is one lead so it stays inside
+  function limits. The Leads bulk bar has the same action as
+  "Find Contacts + Draft".
+- **Throttled bulk send** → select leads (shift-click selects a range) and
+  press "Send Drafts", choosing a spread (15 min to 2 hours). Drafts are
+  marked `queued` with a `scheduled_for` time, at least 20s apart with jitter
+  (`lib/outreach/send.ts`). The Leads page drains due emails every 20s while
+  open; `/api/cron/send-queue` (every 10 minutes in `vercel.json`, Pro plan
+  cadence; Hobby runs crons at most daily) drains them otherwise. A rolling
+  cap of 300 sends per 24h applies. "Cancel remaining" returns queued emails
+  to draft. Apply `supabase/migrations/0022_send_queue.sql` first.
 - **Who sent it** → `outreach.sent_via` (`app` | `gmail`). The app writes `app`
   at send time; outreach sent by hand from the inbox and imported later is
   `gmail`. The Leads list shows a "Sent by" column and filter, and the lead
