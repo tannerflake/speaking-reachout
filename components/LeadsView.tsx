@@ -14,10 +14,13 @@ import {
   ContactGapBadge,
   DraftGapBadge,
   OriginBadge,
+  QueuedBadge,
   SourceBadge,
   StatusBadge,
   TypeBadge,
+  WorkingBadge,
 } from "@/components/Badge";
+import type { WorkKind } from "@/components/Badge";
 import {
   bulkDraft,
   cancelSendQueue,
@@ -37,6 +40,8 @@ import { useInlineConfirm } from "@/components/InlineConfirm";
 
 // Send-queue pacing options offered in the bulk bar (minutes to spread over).
 const SPREAD_OPTIONS = [
+  { value: 5, label: "over 5 min" },
+  { value: 10, label: "over 10 min" },
   { value: 15, label: "over 15 min" },
   { value: 30, label: "over 30 min" },
   { value: 60, label: "over 1 hour" },
@@ -101,10 +106,28 @@ export function LeadsView({
   const [spread, setSpread] = useState<number>(60);
   const [queue, setQueue] = useState<QueueStatus | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
+  // Leads with client-side work in flight (contact lookup / drafting /
+  // prepare), so each row shows it and the operator doesn't start it twice.
+  const [working, setWorking] = useState<Map<string, WorkKind>>(new Map());
   // Anchor for shift-click range selection (index into the filtered list).
   const lastClickRef = useRef<number | null>(null);
   const router = useRouter();
   const { ask, confirmEl } = useInlineConfirm();
+
+  function markWorking(ids: string[], kind: WorkKind) {
+    setWorking((prev) => {
+      const next = new Map(prev);
+      for (const id of ids) next.set(id, kind);
+      return next;
+    });
+  }
+  function clearWorking(ids: string[]) {
+    setWorking((prev) => {
+      const next = new Map(prev);
+      for (const id of ids) next.delete(id);
+      return next;
+    });
+  }
 
   // --- Send queue: poll while anything is queued and drain what is due. The
   // cron route does the same on a schedule, so closing the tab is fine.
@@ -252,15 +275,20 @@ export function LeadsView({
     const ids = Array.from(selected);
     if (ids.length === 0) return;
     setMsg(null);
+    markWorking(ids, "drafting");
     start(async () => {
-      const res = await bulkDraft(ids);
-      setMsg(
-        `Drafted ${res.created} outreach email${res.created === 1 ? "" : "s"}${
-          res.failed ? `, ${res.failed} failed` : ""
-        }. Open a lead to review and send.`,
-      );
-      setSelected(new Set());
-      router.refresh();
+      try {
+        const res = await bulkDraft(ids);
+        setMsg(
+          `Drafted ${res.created} outreach email${res.created === 1 ? "" : "s"}${
+            res.failed ? `, ${res.failed} failed` : ""
+          }. Open a lead to review and send.`,
+        );
+        setSelected(new Set());
+        router.refresh();
+      } finally {
+        clearWorking(ids);
+      }
     });
   }
 
@@ -280,17 +308,26 @@ export function LeadsView({
       } via the configured provider? Each lookup costs one paid credit. Leads that already have an email are skipped.`,
       () => {
         setMsg(null);
+        // Only the leads that will actually be looked up; the rest are skipped.
+        const lookingUp = filtered
+          .filter((r) => selected.has(r.id) && !r.hasContactEmail)
+          .map((r) => r.id);
+        markWorking(lookingUp, "finding");
         start(async () => {
-          const res = await bulkFindContacts(ids);
-          setMsg(
-            res.error
-              ? `Contact lookup failed: ${res.error}`
-              : `Found ${res.found} contact email${res.found === 1 ? "" : "s"}${
-                  res.notFound ? `, ${res.notFound} not found` : ""
-                }${res.skipped ? `, ${res.skipped} already had one` : ""}.`,
-          );
-          setSelected(new Set());
-          router.refresh();
+          try {
+            const res = await bulkFindContacts(ids);
+            setMsg(
+              res.error
+                ? `Contact lookup failed: ${res.error}`
+                : `Found ${res.found} contact email${res.found === 1 ? "" : "s"}${
+                    res.notFound ? `, ${res.notFound} not found` : ""
+                  }${res.skipped ? `, ${res.skipped} already had one` : ""}.`,
+            );
+            setSelected(new Set());
+            router.refresh();
+          } finally {
+            clearWorking(lookingUp);
+          }
         });
       },
     );
@@ -306,6 +343,7 @@ export function LeadsView({
       }? Contact finding uses the web-search models plus one paid Hunter lookup per lead where needed.`,
       () => {
         setMsg(null);
+        markWorking(ids, "preparing");
         start(async () => {
           let done = 0;
           let contacts = 0;
@@ -316,7 +354,12 @@ export function LeadsView({
             for (;;) {
               const id = todo.shift();
               if (!id) return;
-              const res = await enrichLead(id);
+              let res;
+              try {
+                res = await enrichLead(id);
+              } finally {
+                clearWorking([id]);
+              }
               done += 1;
               contacts += res.contactsWithEmail;
               drafts += res.draftsCreated;
@@ -326,8 +369,12 @@ export function LeadsView({
               );
             }
           }
-          await Promise.all([worker(), worker()]);
-          setProgress(null);
+          try {
+            await Promise.all([worker(), worker()]);
+          } finally {
+            clearWorking(ids);
+            setProgress(null);
+          }
           setMsg(
             `Ready to send: ${drafts} draft${drafts === 1 ? "" : "s"} across ${ids.length} lead${
               ids.length === 1 ? "" : "s"
@@ -680,6 +727,8 @@ export function LeadsView({
                       >
                         {r.name}
                       </Link>
+                      <WorkingBadge kind={working.get(r.id)} />
+                      <QueuedBadge count={r.queuedCount} />
                       <SourceBadge source={r.source} />
                     </div>
                   </td>

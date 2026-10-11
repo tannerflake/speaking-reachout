@@ -25,6 +25,8 @@ export interface LeadListRow extends Lead {
   lastActivity: string;
   /** True when the lead has at least one draft (unsent) outreach. */
   hasUnsentDraft: boolean;
+  /** Emails to this lead sitting in the send queue (status 'queued'). */
+  queuedCount: number;
   /** Contacts with a usable email address. */
   emailableContacts: number;
   /**
@@ -123,6 +125,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
       draftedContacts: emailable.filter((c) => covered.has(c.id)).length,
       lastActivity: last,
       hasUnsentDraft: (row.outreach ?? []).some((o) => o.status === "draft"),
+      queuedCount: (row.outreach ?? []).filter((o) => o.status === "queued").length,
       originatedVia: firstSent?.sent_via ?? null,
     };
   });

@@ -16,12 +16,15 @@ import type {
 function Pill({
   children,
   className,
+  title,
 }: {
   children: React.ReactNode;
   className: string;
+  title?: string;
 }) {
   return (
     <span
+      title={title}
       className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${className}`}
     >
       {children}
@@ -134,6 +137,45 @@ export function DraftGapBadge({
   return (
     <Pill className="border-emerald-200 bg-emerald-50 text-emerald-700">
       Drafted
+    </Pill>
+  );
+}
+
+/**
+ * Shown next to a lead's name while any email to that lead is waiting in the
+ * send queue, so it is obvious at a glance that they are already being sent
+ * to. Renders nothing once the queue for that lead has drained.
+ */
+export function QueuedBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <Pill
+      className="border-indigo-200 bg-indigo-50 text-indigo-700"
+      title={`${count} email${count === 1 ? "" : "s"} waiting in the send queue`}
+    >
+      {count === 1 ? "In queue" : `In queue (${count})`}
+    </Pill>
+  );
+}
+
+/** Client-side work in flight on a lead (not persisted; lives in the page). */
+export type WorkKind = "finding" | "drafting" | "preparing";
+
+const WORK_LABELS: Record<WorkKind, { text: string; title: string }> = {
+  finding: { text: "Finding contacts…", title: "Looking up contact emails for this lead" },
+  drafting: { text: "Drafting…", title: "Writing outreach drafts for this lead" },
+  preparing: { text: "Preparing…", title: "Finding contacts and drafting outreach for this lead" },
+};
+
+export function WorkingBadge({ kind }: { kind?: WorkKind }) {
+  if (!kind) return null;
+  const { text, title } = WORK_LABELS[kind];
+  return (
+    <Pill
+      className="animate-pulse border-amber-200 bg-amber-50 text-amber-700"
+      title={title}
+    >
+      {text}
     </Pill>
   );
 }

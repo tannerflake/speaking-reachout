@@ -4,6 +4,7 @@ import { getLead, getLeadFollowups, getLeadInteractions } from "@/lib/data";
 import {
   ContactStatusBadge,
   OriginBadge,
+  QueuedBadge,
   SourceBadge,
   StatusBadge,
   TypeBadge,
@@ -62,6 +63,9 @@ export default async function LeadDetailPage({
         </Link>
         <div className="mt-2 flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-semibold text-zinc-900">{lead.name}</h1>
+          <QueuedBadge
+            count={lead.outreach.filter((o) => o.status === "queued").length}
+          />
           <TypeBadge type={lead.type} />
           <StatusBadge status={lead.status} />
           <SourceBadge source={lead.source} />
