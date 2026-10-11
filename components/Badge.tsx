@@ -9,6 +9,7 @@ import type {
   ContactStatus,
   LeadSource,
   LeadStatus,
+  OutreachChannel,
   OutreachStatus,
 } from "@/lib/types";
 
@@ -43,6 +44,31 @@ export function ContactStatusBadge({ status }: { status: ContactStatus }) {
 export function OutreachStatusBadge({ status }: { status: OutreachStatus }) {
   const label = { draft: "Draft", sent: "Sent", failed: "Failed" }[status];
   return <Pill className={outreachStatusClasses(status)}>{label}</Pill>;
+}
+
+export function originLabel(via: OutreachChannel): string {
+  return via === "app" ? "Sent via app" : "Sent from Gmail";
+}
+
+/**
+ * Who started the conversation with this lead. "Sent via app" means the
+ * operator sent the first outreach here (commissionable); "Sent from Gmail"
+ * means it was sent by hand and imported. Renders nothing until something has
+ * been sent.
+ */
+export function OriginBadge({ via }: { via: OutreachChannel | null }) {
+  if (!via) return null;
+  return (
+    <Pill
+      className={
+        via === "app"
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "border-amber-200 bg-amber-50 text-amber-800"
+      }
+    >
+      {originLabel(via)}
+    </Pill>
+  );
 }
 
 /**

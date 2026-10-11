@@ -56,6 +56,9 @@ export function statusLabel(status: LeadStatus): string {
   return {
     new: "New",
     reached_out: "Reached out",
+    followup_1: "Follow-up 1",
+    followup_2: "Follow-up 2",
+    followup_3: "Follow-up 3",
     interested: "Interested",
     booked: "Booked",
     closed: "Closed",
@@ -69,6 +72,9 @@ export function statusClasses(status: LeadStatus): string {
   return {
     new: "bg-zinc-100 text-zinc-700 border-zinc-200",
     reached_out: "bg-blue-50 text-blue-700 border-blue-200",
+    followup_1: "bg-indigo-50 text-indigo-700 border-indigo-200",
+    followup_2: "bg-indigo-50 text-indigo-700 border-indigo-200",
+    followup_3: "bg-indigo-50 text-indigo-700 border-indigo-200",
     interested: "bg-amber-50 text-amber-700 border-amber-200",
     booked: "bg-emerald-50 text-emerald-700 border-emerald-200",
     closed: "bg-violet-50 text-violet-700 border-violet-200",

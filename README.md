@@ -149,6 +149,54 @@ Sign in with the operator account, then **Discover** your first batch of leads.
 
 ---
 
+## 7. Automated follow-ups
+
+Every initial outreach that is sent starts a follow-up sequence for that
+recipient: up to **three short nudges, sent as replies in the same Gmail
+thread**, on a widening cadence of roughly **day 4, day 11, and day 21**
+(weekends roll to Monday). The cadence lives in
+[`lib/followups/cadence.ts`](lib/followups/cadence.ts) and reflects the
+consensus of cold-outreach benchmarks: most replies come from the first two
+follow-ups, each later touch earns fewer replies and more spam complaints, and
+the curve flattens after three.
+
+Each follow-up is written fresh at send time on the lower-cost model (no web
+search): a different job per step (light bump → one new angle or a timing
+question → graceful close), plain prose, no automation cliches, aware of the
+earlier nudges so it never repeats itself. Style rules and the learned voice
+apply as they do to initial outreach.
+
+**A follow-up is never sent if** the thread already has a reply or bounce
+(checked live against Gmail right before sending, not just from the last
+scan), the lead has left the outreach stage (interested, booked, not
+interested, junk…), the contact has no valid email, or the operator paused the
+sequence. The lead's status advances to **Follow-up 1 / 2 / 3** as each goes
+out, and every send, stop, pause, and resume is written to the activity log.
+
+**Scheduling.** `vercel.json` registers a cron that hits
+`/api/cron/followups` every weekday at 15:00 UTC (8am Arizona). Set
+`CRON_SECRET` in the environment; Vercel sends it as a bearer token and the
+route refuses to run without it. The Dashboard also has a **Send due
+follow-ups** button for running today's batch by hand (or on a host without
+cron), and each lead page shows its sequences with pause / resume / send-now.
+Trigger it manually with:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" https://<your-domain>/api/cron/followups
+```
+
+Apply `supabase/migrations/0020_followups.sql` before using this.
+
+- **Who sent it** → `outreach.sent_via` (`app` | `gmail`). The app writes `app`
+  at send time; outreach sent by hand from the inbox and imported later is
+  `gmail`. The Leads list shows a "Sent by" column and filter, and the lead
+  header shows the badge for the earliest sent outreach, because commission
+  follows whoever started the conversation. Apply
+  `supabase/migrations/0021_outreach_sent_via.sql` first; it also back-fills
+  the imported fall 2026 campaign as `gmail`.
+
+---
+
 ## Deploying to Vercel
 
 1. Push the repo and import it in Vercel.
@@ -157,6 +205,7 @@ Sign in with the operator account, then **Discover** your first batch of leads.
 3. Set `GOOGLE_REDIRECT_URI` to `https://<your-domain>/api/gmail/callback` and
    add that same URI to the Google OAuth client's Authorized redirect URIs.
 4. (Optional) set `NEXT_PUBLIC_APP_URL` to your production URL.
+5. Set `CRON_SECRET` (any long random string) so the follow-up cron can run.
 
 **Function duration:** Discovery and outreach make long web-search calls. The
 `/discover` and `/leads/[id]` routes declare `maxDuration = 300`. This is honored

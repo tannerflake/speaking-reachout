@@ -5,12 +5,14 @@ import type {
   Booking,
   Contact,
   EmailInsight,
+  FollowupSequence,
   Interaction,
   Lead,
   LeadStatus,
   LeadType,
   LeadWithRelations,
   Outreach,
+  OutreachChannel,
   TailoringRule,
   VoiceProfile,
 } from "@/lib/types";
@@ -23,6 +25,12 @@ export interface LeadListRow extends Lead {
   lastActivity: string;
   /** True when the lead has at least one draft (unsent) outreach. */
   hasUnsentDraft: boolean;
+  /**
+   * Channel of the EARLIEST sent outreach to this lead, or null if nothing has
+   * been sent. This is who gets the commission: "app" means the operator
+   * started the conversation, "gmail" means it was started by hand.
+   */
+  originatedVia: OutreachChannel | null;
 }
 
 export interface LeadFilters {
@@ -63,7 +71,9 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
   const supabase = await createClient();
   let query = supabase
     .from("leads")
-    .select("*, contacts(email), interactions(created_at), outreach(status)")
+    .select(
+      "*, contacts(email), interactions(created_at), outreach(status, sent_via, sent_at)",
+    )
     .order("created_at", { ascending: false });
 
   if (filters.status) query = query.eq("status", filters.status);
@@ -75,9 +85,16 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
   type Row = Lead & {
     contacts: { email: string | null }[];
     interactions: { created_at: string }[];
-    outreach: { status: string }[];
+    outreach: {
+      status: string;
+      sent_via: OutreachChannel;
+      sent_at: string | null;
+    }[];
   };
   return ((data as Row[]) ?? []).map((row) => {
+    const firstSent = (row.outreach ?? [])
+      .filter((o) => o.status === "sent" && o.sent_at)
+      .sort((a, b) => (a.sent_at as string).localeCompare(b.sent_at as string))[0];
     const activityTimes = (row.interactions ?? []).map((i) =>
       new Date(i.created_at).getTime(),
     );
@@ -91,6 +108,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
       hasContactEmail: contacts.some((c) => looksLikeRealEmail(c.email)),
       lastActivity: last,
       hasUnsentDraft: (row.outreach ?? []).some((o) => o.status === "draft"),
+      originatedVia: firstSent?.sent_via ?? null,
     };
   });
 }
@@ -146,6 +164,29 @@ export async function getLeadInteractions(
     .eq("lead_id", leadId)
     .order("created_at", { ascending: false });
   return (data as Interaction[]) ?? [];
+}
+
+export async function getLeadFollowups(
+  leadId: string,
+): Promise<FollowupSequence[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("followup_sequences")
+    .select("*")
+    .eq("lead_id", leadId)
+    .order("created_at", { ascending: true });
+  return (data as FollowupSequence[]) ?? [];
+}
+
+/** Count of follow-ups the scheduler would send right now (dashboard hint). */
+export async function getDueFollowupCount(): Promise<number> {
+  const supabase = await createClient();
+  const { count } = await supabase
+    .from("followup_sequences")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "active")
+    .lte("next_due_at", new Date().toISOString());
+  return count ?? 0;
 }
 
 export async function getActiveRules(): Promise<TailoringRule[]> {

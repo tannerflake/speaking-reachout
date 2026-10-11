@@ -3,6 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getContactResolver } from "@/lib/contacts/resolver";
+import {
+  MAX_CONTACTS_PER_LEAD,
+  findContactsMultiSource,
+} from "@/lib/contacts/multiSource";
 import { looksLikeRealEmail } from "@/lib/utils";
 import type { Contact } from "@/lib/types";
 
@@ -43,6 +47,7 @@ export async function resolveContactEmail(
     name: contact.lead?.name ?? "",
     website: contact.lead?.website ?? null,
     source_url: contact.source_url ?? contact.lead?.source_url ?? null,
+    personName: contact.name,
     claudeContact: null,
   });
 
@@ -263,6 +268,112 @@ export async function bulkFindContacts(
 
   revalidatePath("/admin/leads");
   return { found, skipped, notFound };
+}
+
+export interface MultiFindResult {
+  added: number;
+  withEmail: number;
+  sources: string[];
+  failed: Array<{ source: string; reason: string }>;
+  hunterUsed: boolean;
+  error?: string;
+}
+
+/**
+ * Find up to MAX_CONTACTS_PER_LEAD people at one lead by asking every
+ * configured web-search LLM (Claude, OpenAI, Gemini, Perplexity), verifying
+ * them against the pages they cite, and filling gaps with one Hunter domain
+ * search. EXPLICIT, operator-triggered, one lead at a time.
+ */
+export async function findMultipleContacts(leadId: string): Promise<MultiFindResult> {
+  const empty = { added: 0, withEmail: 0, sources: [], failed: [], hunterUsed: false };
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("leads")
+    .select(
+      "id, name, type, description, location_region, location_country, website, source_url, contacts(*)",
+    )
+    .eq("id", leadId)
+    .single();
+  if (!data) return { ...empty, error: "Lead not found." };
+
+  const lead = data as {
+    id: string;
+    name: string;
+    type: string;
+    description: string | null;
+    location_region: string | null;
+    location_country: string | null;
+    website: string | null;
+    source_url: string | null;
+    contacts: Contact[];
+  };
+  const existing = lead.contacts ?? [];
+  const slots =
+    MAX_CONTACTS_PER_LEAD - existing.filter((c) => looksLikeRealEmail(c.email)).length;
+  if (slots <= 0) {
+    return {
+      ...empty,
+      error: `This lead already has ${MAX_CONTACTS_PER_LEAD} contacts with emails.`,
+    };
+  }
+
+  const result = await findContactsMultiSource({
+    name: lead.name,
+    type: lead.type,
+    description: lead.description,
+    location:
+      [lead.location_region, lead.location_country].filter(Boolean).join(", ") || null,
+    website: lead.website,
+    source_url: lead.source_url,
+    exclude: existing.map((c) => ({ name: c.name, email: c.email })),
+    max: slots,
+  });
+
+  if (result.contacts.length === 0) {
+    return {
+      ...empty,
+      sources: result.succeeded,
+      failed: result.failed,
+      hunterUsed: result.hunterUsed,
+      error:
+        result.succeeded.length === 0
+          ? "None of the contact sources returned results."
+          : "No new contacts could be verified for this lead.",
+    };
+  }
+
+  const { error } = await supabase.from("contacts").insert(
+    result.contacts.map((c) => ({
+      lead_id: lead.id,
+      name: c.name,
+      role: c.role,
+      email: c.email,
+      contact_status: c.contact_status,
+      source_url: c.source_url,
+    })),
+  );
+  if (error) return { ...empty, error: error.message };
+
+  const withEmail = result.contacts.filter((c) => c.email).length;
+  const lines = result.contacts
+    .map((c) => `${c.name}${c.email ? ` <${c.email}>` : ""} [${c.sources.join(", ")}]`)
+    .join("; ");
+  await supabase.from("interactions").insert({
+    lead_id: lead.id,
+    kind: "note",
+    detail: `Found ${result.contacts.length} contacts (${withEmail} with email): ${lines}.`,
+  });
+
+  revalidatePath(`/admin/leads/${lead.id}`);
+  revalidatePath("/admin/leads");
+  return {
+    added: result.contacts.length,
+    withEmail,
+    sources: result.succeeded,
+    failed: result.failed,
+    hunterUsed: result.hunterUsed,
+  };
 }
 
 /** Manually set a contact's email (operator-confirmed → verified). */

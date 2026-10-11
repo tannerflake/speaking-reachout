@@ -22,7 +22,51 @@ export async function sendGmail(params: {
   to: string;
   subject: string;
   body: string;
+  /**
+   * Reply-in-thread options. When set, the message is appended to the given
+   * Gmail thread and carries In-Reply-To/References headers so every mail
+   * client renders it as a reply to the original, not a new email.
+   */
+  thread?: {
+    threadId: string;
+    /** RFC 2822 Message-ID of the message being replied to. */
+    inReplyTo?: string | null;
+    /** RFC 2822 Message-IDs of the whole thread so far, oldest first. */
+    references?: string[];
+  };
 }): Promise<SendResult> {
+  const { gmail, conn } = await getGmailClient();
+  const raw = buildRawMessage({
+    to: params.to,
+    from: conn.email ?? undefined,
+    subject: params.subject,
+    body: params.body,
+    inReplyTo: params.thread?.inReplyTo ?? undefined,
+    references: params.thread?.references,
+  });
+
+  const res = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: {
+      raw,
+      threadId: params.thread?.threadId,
+    },
+  });
+
+  const messageId = res.data.id ?? "";
+  const threadId = res.data.threadId ?? "";
+  if (!messageId) throw new Error("Gmail send returned no message id.");
+  return { messageId, threadId };
+}
+
+/**
+ * Authenticated Gmail API client for the connected account, with token
+ * refreshes persisted. Shared by send + follow-up thread checks.
+ */
+export async function getGmailClient(): Promise<{
+  gmail: ReturnType<typeof google.gmail>;
+  conn: { email: string | null };
+}> {
   const conn = await getGmailConnection();
   if (!conn?.refresh_token) throw new GmailNotConnectedError();
 
@@ -46,22 +90,7 @@ export async function sendGmail(params: {
   });
 
   const gmail = google.gmail({ version: "v1", auth: oauth });
-  const raw = buildRawMessage({
-    to: params.to,
-    from: conn.email ?? undefined,
-    subject: params.subject,
-    body: params.body,
-  });
-
-  const res = await gmail.users.messages.send({
-    userId: "me",
-    requestBody: { raw },
-  });
-
-  const messageId = res.data.id ?? "";
-  const threadId = res.data.threadId ?? "";
-  if (!messageId) throw new Error("Gmail send returned no message id.");
-  return { messageId, threadId };
+  return { gmail, conn: { email: conn.email } };
 }
 
 function buildRawMessage(opts: {
@@ -69,11 +98,15 @@ function buildRawMessage(opts: {
   from?: string;
   subject: string;
   body: string;
+  inReplyTo?: string;
+  references?: string[];
 }): string {
   const headers = [
     `To: ${opts.to}`,
     opts.from ? `From: ${opts.from}` : null,
     `Subject: ${encodeHeader(opts.subject)}`,
+    opts.inReplyTo ? `In-Reply-To: ${opts.inReplyTo}` : null,
+    opts.references?.length ? `References: ${opts.references.join(" ")}` : null,
     "MIME-Version: 1.0",
     'Content-Type: text/plain; charset="UTF-8"',
     "Content-Transfer-Encoding: 7bit",

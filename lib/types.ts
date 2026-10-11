@@ -6,6 +6,9 @@ export type LeadType = "event" | "institution" | "other";
 export type LeadStatus =
   | "new"
   | "reached_out"
+  | "followup_1"
+  | "followup_2"
+  | "followup_3"
   | "interested"
   | "booked"
   | "closed"
@@ -16,6 +19,9 @@ export type LeadStatus =
 export const LEAD_STATUSES: LeadStatus[] = [
   "new",
   "reached_out",
+  "followup_1",
+  "followup_2",
+  "followup_3",
   "interested",
   "booked",
   "closed",
@@ -27,6 +33,9 @@ export const LEAD_STATUSES: LeadStatus[] = [
 export const PIPELINE_STATUSES: LeadStatus[] = [
   "new",
   "reached_out",
+  "followup_1",
+  "followup_2",
+  "followup_3",
   "interested",
   "booked",
   "closed",
@@ -39,6 +48,13 @@ export type ContactStatus = "verified" | "unverified" | "needs_lookup";
 
 export type OutreachStatus = "draft" | "sent" | "failed";
 
+/**
+ * How an outreach email left the building: sent by this app, or sent by hand
+ * from the Gmail inbox and imported later. Commission follows the FIRST
+ * outreach to a lead, and only app-sent outreach is the operator's.
+ */
+export type OutreachChannel = "app" | "gmail";
+
 export type RuleType =
   | "discovery_filter"
   | "copy_style"
@@ -49,6 +65,7 @@ export type InteractionKind =
   | "status_change"
   | "note"
   | "email_sent"
+  | "followup_sent"
   | "discovered";
 
 export interface Lead {
@@ -93,7 +110,34 @@ export interface Outreach {
   sent_at: string | null;
   replied_at: string | null;
   bounced_at: string | null;
+  sent_via: OutreachChannel;
+  /** 0 = initial outreach, 1..n = follow-up number in the thread. */
+  sequence_step: number;
+  /** The initial outreach this follow-up belongs to (null on step 0). */
+  parent_outreach_id: string | null;
   created_at: string;
+}
+
+// ---- Automated follow-ups -------------------------------------------------
+export type FollowupSequenceStatus =
+  | "active"
+  | "paused"
+  | "completed"
+  | "stopped";
+
+export interface FollowupSequence {
+  id: string;
+  outreach_id: string;
+  lead_id: string;
+  contact_id: string | null;
+  steps_sent: number;
+  max_steps: number;
+  next_due_at: string | null;
+  status: FollowupSequenceStatus;
+  stop_reason: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Booking {

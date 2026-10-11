@@ -105,8 +105,10 @@ export async function generateWithWebSearch(opts: {
    * hanging forever. Defaults to 4 minutes.
    */
   timeoutMs?: number;
+  /** Use the lower-cost model (faster; fine for lookup-style research). */
+  cheap?: boolean;
 }): Promise<string> {
-  const client = getAnthropic();
+  const client = opts.cheap ? getAnthropicCheap() : getAnthropic();
   const messages: Anthropic.MessageParam[] = [
     { role: "user", content: opts.userPrompt },
   ];
@@ -128,7 +130,7 @@ export async function generateWithWebSearch(opts: {
   for (;;) {
     const stream = client.messages.stream(
       {
-        model: CLAUDE_MODEL,
+        model: opts.cheap ? CLAUDE_MODEL_CHEAP : CLAUDE_MODEL,
         max_tokens: opts.maxTokens ?? 16000,
         thinking: { type: "adaptive" },
         system: opts.system,

@@ -1,6 +1,7 @@
 import { getEnv } from "@/lib/env";
 import { domainFromUrl, looksLikeRealEmail } from "@/lib/utils";
 import type { ContactStatus } from "@/lib/types";
+import { personKey } from "@/lib/contacts/multiSource";
 
 export interface ResolvedContact {
   name: string | null;
@@ -14,6 +15,12 @@ export interface ResolverInput {
   name: string;
   website: string | null;
   source_url: string | null;
+  /**
+   * A specific person to look up (e.g. a contact found by the multi-source
+   * finder). When set, Hunter uses its per-person Email Finder instead of
+   * returning the domain's "best" email, which could be someone else.
+   */
+  personName?: string | null;
   /** Contact Claude already surfaced during discovery (default path). */
   claudeContact?: {
     name: string | null;
@@ -89,6 +96,8 @@ class HunterContactResolver implements ContactResolver {
     const domain = domainFromUrl(input.website) ?? domainFromUrl(input.source_url);
     if (!domain) return { ...NEEDS_LOOKUP };
 
+    if (input.personName) return this.findPerson(input.personName, domain);
+
     try {
       const url = new URL("https://api.hunter.io/v2/domain-search");
       url.searchParams.set("domain", domain);
@@ -119,6 +128,44 @@ class HunterContactResolver implements ContactResolver {
         email: best.value,
         // A publicly listed email returned by the provider — treat as verified.
         contact_status: "verified",
+        source_url: `https://${domain}`,
+      };
+    } catch {
+      return { ...NEEDS_LOOKUP };
+    }
+  }
+
+  /** Hunter Email Finder: one named person at a domain (1 credit). */
+  private async findPerson(fullName: string, domain: string): Promise<ResolvedContact> {
+    const key = personKey(fullName).split(" ");
+    if (key.length < 2) return { ...NEEDS_LOOKUP };
+    try {
+      const url = new URL("https://api.hunter.io/v2/email-finder");
+      url.searchParams.set("domain", domain);
+      url.searchParams.set("first_name", key[0]);
+      url.searchParams.set("last_name", key[key.length - 1]);
+      url.searchParams.set("api_key", this.apiKey);
+      const res = await fetch(url, { method: "GET" });
+      if (!res.ok) return { ...NEEDS_LOOKUP };
+      const json = (await res.json()) as {
+        data?: {
+          email?: string | null;
+          score?: number;
+          position?: string | null;
+          verification?: { status?: string | null };
+        };
+      };
+      const d = json.data;
+      if (!d?.email || !looksLikeRealEmail(d.email) || (d.score ?? 0) < 50) {
+        return { ...NEEDS_LOOKUP };
+      }
+      return {
+        name: fullName,
+        role: d.position ?? null,
+        email: d.email,
+        // Email Finder infers from patterns; only Hunter's "valid" check counts
+        // as verified.
+        contact_status: d.verification?.status === "valid" ? "verified" : "unverified",
         source_url: `https://${domain}`,
       };
     } catch {

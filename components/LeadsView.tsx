@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ContactGapBadge,
+  OriginBadge,
   SourceBadge,
   StatusBadge,
   TypeBadge,
@@ -21,6 +22,8 @@ import { formatDateTime, statusLabel } from "@/lib/utils";
 // lead status — so the dropdown value is a status OR this sentinel.
 const STATUS_FILTER_KEY = "leads:statusFilter";
 const SOURCE_FILTER_KEY = "leads:sourceFilter";
+// Who started the conversation (commission): app / gmail / nothing sent yet.
+const ORIGIN_FILTER_KEY = "leads:originFilter";
 
 export function LeadsView({
   rows,
@@ -31,6 +34,7 @@ export function LeadsView({
 }) {
   const [status, setStatus] = useState<string>(initialStatus ?? "");
   const [source, setSource] = useState<string>("");
+  const [origin, setOrigin] = useState<string>("");
   const [search, setSearch] = useState<string>("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
@@ -49,6 +53,8 @@ export function LeadsView({
     }
     const savedSource = localStorage.getItem(SOURCE_FILTER_KEY);
     if (savedSource) setSource(savedSource);
+    const savedOrigin = localStorage.getItem(ORIGIN_FILTER_KEY);
+    if (savedOrigin) setOrigin(savedOrigin);
   }, [initialStatus]);
 
   function changeStatus(value: string) {
@@ -61,6 +67,11 @@ export function LeadsView({
     localStorage.setItem(SOURCE_FILTER_KEY, value);
   }
 
+  function changeOrigin(value: string) {
+    setOrigin(value);
+    localStorage.setItem(ORIGIN_FILTER_KEY, value);
+  }
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((r) => {
@@ -70,10 +81,15 @@ export function LeadsView({
         return false;
       }
       if (source && r.source !== source) return false;
+      if (origin === "unsent") {
+        if (r.originatedVia) return false;
+      } else if (origin && r.originatedVia !== origin) {
+        return false;
+      }
       if (q && !r.name.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [rows, status, source, search]);
+  }, [rows, status, source, origin, search]);
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -197,6 +213,17 @@ export function LeadsView({
           <option value="website_inbound">Via jeffflake.com</option>
           <option value="outbound">Outbound</option>
         </select>
+        <select
+          value={origin}
+          onChange={(e) => changeOrigin(e.target.value)}
+          className={selectClass}
+          aria-label="Filter by who sent the first outreach"
+        >
+          <option value="">All senders</option>
+          <option value="app">Sent via app</option>
+          <option value="gmail">Sent from Gmail</option>
+          <option value="unsent">Nothing sent yet</option>
+        </select>
       </div>
 
       {/* Bulk action bar */}
@@ -253,6 +280,7 @@ export function LeadsView({
               <th>Type</th>
               <th>Country</th>
               <th>Status</th>
+              <th>Sent by</th>
               <th>Contacts</th>
               <th>Last activity</th>
             </tr>
@@ -260,7 +288,7 @@ export function LeadsView({
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={7} className="text-center text-zinc-500">
+                <td colSpan={8} className="text-center text-zinc-500">
                   No leads match. Run{" "}
                   <Link href="/admin/discover" className="text-blue-600 hover:underline">
                     Discover
@@ -298,6 +326,13 @@ export function LeadsView({
                   </td>
                   <td>
                     <StatusBadge status={r.status} />
+                  </td>
+                  <td>
+                    {r.originatedVia ? (
+                      <OriginBadge via={r.originatedVia} />
+                    ) : (
+                      <span className="text-zinc-400">—</span>
+                    )}
                   </td>
                   <td className="text-zinc-600">
                     <div className="flex items-center gap-2">

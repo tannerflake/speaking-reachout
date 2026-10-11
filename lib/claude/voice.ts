@@ -83,7 +83,7 @@ async function runPass(
   const text = await generateText({
     system,
     userPrompt,
-    maxTokens: 3500,
+    maxTokens: 8000,
   });
   try {
     const parsed = extractJson<Record<string, unknown>>(text);
@@ -103,7 +103,22 @@ async function runPass(
       .filter((i) => i.insight);
     return { summary, insights };
   } catch {
-    return { summary: text.slice(0, 1200), insights: [] };
+    // Malformed or truncated JSON (unescaped quotes/newlines in a long
+    // summary are the usual cause): salvage the summary string itself rather
+    // than storing the raw model text with its code fence.
+    const m = text.match(
+      new RegExp(
+        `"${summaryKey}"\\s*:\\s*"([\\s\\S]*?)(?:"\\s*,\\s*"insights"|"\\s*\\}|$)`,
+      ),
+    );
+    const raw = m ? m[1] : text.replace(/```(?:json)?/gi, "");
+    let summary = raw;
+    try {
+      summary = JSON.parse(`"${raw}"`) as string;
+    } catch {
+      summary = raw.replace(/\\n/g, "\n").replace(/\\"/g, '"');
+    }
+    return { summary: summary.trim().slice(0, 4000), insights: [] };
   }
 }
 
@@ -209,7 +224,9 @@ Suggested rules use rule_type one of: "copy_style" (how to write — most common
 
 Return ONLY JSON: {"prompt_injection": string, "suggested_rules": [{"rule_type": string, "raw_instruction": string, "structured_value": object}]}`,
     userPrompt: `VOICE/TONE:\n${voice.summary}\n\nTACTICS:\n${tactics.summary}\n\nSTRUCTURE:\n${structure.summary}\n\nCADENCE:\n${cadence.summary}`,
-    maxTokens: 3000,
+    // Adaptive thinking spends from the same max_tokens budget as the visible
+    // output; too small a cap truncates the JSON mid-string.
+    maxTokens: 8000,
   });
 
   let prompt_injection = "";

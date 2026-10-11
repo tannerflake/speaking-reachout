@@ -2,10 +2,12 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { OutreachStatusBadge } from "@/components/Badge";
+import { OriginBadge, OutreachStatusBadge } from "@/components/Badge";
 import {
   approveAndSend,
+  draftForAllContacts,
   generateDraft,
+  sendAllDrafts,
   regenerateDraft,
   updateDraft,
 } from "@/app/actions/outreach";
@@ -80,6 +82,73 @@ export function OutreachManager({
       if (res.styleAdjusted)
         setMessage("Draft created. Style rules were applied automatically.");
       else setMessage("Draft created.");
+      router.refresh();
+    });
+  }
+
+  // Contacts with an email that don't have a draft or sent email yet.
+  const coveredIds = new Set(outreach.map((o) => o.contact_id).filter(Boolean));
+  const uncovered = contacts.filter(
+    (c) => looksLikeRealEmail(c.email) && !coveredIds.has(c.id),
+  );
+  const sendable = outreach.filter(
+    (o) =>
+      o.status !== "sent" &&
+      looksLikeRealEmail(contacts.find((c) => c.id === o.contact_id)?.email),
+  );
+
+  function draftAll() {
+    clearMsgs();
+    setBusyId("all");
+    start(async () => {
+      const res = await draftForAllContacts(leadId, newOneOff.trim() || undefined);
+      setBusyId(null);
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      setNewOneOff("");
+      setMessage(
+        `Created ${res.created} drafts, one per contact. Review each below before sending.`,
+      );
+      router.refresh();
+    });
+  }
+
+  function sendAll() {
+    const recipients = sendable
+      .map((o) => contacts.find((c) => c.id === o.contact_id)?.email)
+      .join("\n");
+    if (
+      !window.confirm(
+        `Send ${sendable.length} separate emails to:\n\n${recipients}\n\nEach person gets their own message.`,
+      )
+    ) {
+      return;
+    }
+    clearMsgs();
+    setBusyId("sendAll");
+    start(async () => {
+      // Persist unsaved edits first so we send exactly what's shown.
+      for (const item of sendable) {
+        const buf = getBuf(item);
+        if (buf.subject !== item.subject || buf.body !== item.body) {
+          const upd = await updateDraft(item.id, buf.subject, buf.body);
+          if (upd.error) {
+            setBusyId(null);
+            setError(upd.error);
+            return;
+          }
+        }
+      }
+      const res = await sendAllDrafts(leadId);
+      setBusyId(null);
+      setBufs({});
+      if (res.failed > 0) {
+        setError(`Sent ${res.sent}, ${res.failed} failed: ${res.errors.join("; ")}`);
+      } else {
+        setMessage(`Sent ${res.sent} emails ✓ Lead advanced to Reached out.`);
+      }
       router.refresh();
     });
   }
@@ -198,8 +267,19 @@ export function OutreachManager({
           >
             {busyId === "new" && pending ? "Drafting…" : "Draft Outreach"}
           </button>
+          {uncovered.length > 1 && (
+            <button
+              onClick={draftAll}
+              disabled={pending}
+              className="rounded-md border border-blue-600 bg-white px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-60"
+            >
+              {busyId === "all" && pending
+                ? "Drafting…"
+                : `Draft for all ${uncovered.length} contacts`}
+            </button>
+          )}
         </div>
-        {busyId === "new" && pending && (
+        {(busyId === "new" || busyId === "all") && pending && (
           <p className="mt-2 text-sm text-zinc-500">
             Researching the org with web search and writing a tailored email…
           </p>
@@ -214,6 +294,23 @@ export function OutreachManager({
       {error && (
         <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
           {error}
+        </div>
+      )}
+
+      {sendable.length > 1 && (
+        <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+          <span className="text-sm text-blue-900">
+            {sendable.length} drafts ready, each to a different contact.
+          </span>
+          <button
+            onClick={sendAll}
+            disabled={pending}
+            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+          >
+            {busyId === "sendAll" && pending
+              ? "Sending…"
+              : `Approve & send all ${sendable.length}`}
+          </button>
         </div>
       )}
 
@@ -240,6 +337,14 @@ export function OutreachManager({
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-xs text-zinc-500">
                     <OutreachStatusBadge status={item.status} />
+                    {item.status === "sent" && (
+                      <OriginBadge via={item.sent_via} />
+                    )}
+                    {item.sequence_step > 0 && (
+                      <span className="inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                        Follow-up {item.sequence_step}
+                      </span>
+                    )}
                     <span>
                       {contact
                         ? `To ${contact.name ?? contact.role ?? "contact"}${

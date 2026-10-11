@@ -6,6 +6,7 @@ import { getScannedReplyIds } from "@/lib/data";
 import { GmailReadScopeMissingError, ingestMessages } from "@/lib/gmail/ingest";
 import { GmailNotConnectedError } from "@/lib/gmail/send";
 import { classifyReply } from "@/lib/claude/replyClassify";
+import { stopSequencesForOutreach } from "@/lib/followups/run";
 import { statusLabel } from "@/lib/utils";
 import type { IngestedMessage, LeadStatus } from "@/lib/types";
 
@@ -62,6 +63,7 @@ export async function scanForReplies(): Promise<ScanSummary> {
         "id, lead_id, gmail_thread_id, contact:contacts(email), lead:leads(id, name, status)",
       )
       .eq("status", "sent")
+      .eq("sequence_step", 0) // follow-ups share the thread; track by the original
       .not("gmail_thread_id", "is", null);
     if (outreachErr) return { error: outreachErr.message };
 
@@ -121,6 +123,7 @@ export async function scanForReplies(): Promise<ScanSummary> {
           .update({ bounced_at: new Date().toISOString() })
           .eq("id", t.outreachId)
           .is("bounced_at", null);
+        await stopSequencesForOutreach(admin, t.outreachId, "Email bounced.");
         await admin.from("interactions").insert({
           lead_id: t.leadId,
           kind: "note",
@@ -143,6 +146,7 @@ export async function scanForReplies(): Promise<ScanSummary> {
         .update({ replied_at: new Date().toISOString() })
         .eq("id", t.outreachId)
         .is("replied_at", null);
+      await stopSequencesForOutreach(admin, t.outreachId, "They replied.");
 
       const fromName = m.from.replace(/\s*<[^>]*>\s*/, "").trim() || m.from;
       await admin.from("interactions").insert({

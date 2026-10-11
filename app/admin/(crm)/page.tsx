@@ -1,10 +1,15 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getPipelineCounts, getRecentInteractions } from "@/lib/data";
+import {
+  getDueFollowupCount,
+  getPipelineCounts,
+  getRecentInteractions,
+} from "@/lib/data";
 import { getCurrentUser } from "@/lib/auth/profile";
 import { PIPELINE_STATUSES } from "@/lib/types";
 import { statusClasses, statusLabel, formatDateTime } from "@/lib/utils";
 import { ScanEmailButton } from "@/components/ScanEmailButton";
+import { RunFollowupsButton } from "@/components/RunFollowupsButton";
 
 export const dynamic = "force-dynamic";
 
@@ -13,9 +18,10 @@ export default async function DashboardPage() {
   const me = await getCurrentUser();
   if (me?.role === "editor") redirect("/admin/site-editor");
 
-  const [counts, activity] = await Promise.all([
+  const [counts, activity, dueFollowups] = await Promise.all([
     getPipelineCounts(),
     getRecentInteractions(15),
+    getDueFollowupCount(),
   ]);
 
   return (
@@ -27,7 +33,7 @@ export default async function DashboardPage() {
       {/* Pipeline summary */}
       <section>
         <h2 className="mb-2 text-sm font-medium text-zinc-500">Pipeline</h2>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {PIPELINE_STATUSES.map((s) => (
             <Link
               key={s}
@@ -79,6 +85,7 @@ export default async function DashboardPage() {
             Tailoring settings
           </Link>
           <ScanEmailButton variant="secondary" />
+          <RunFollowupsButton dueCount={dueFollowups} />
         </div>
       </section>
 

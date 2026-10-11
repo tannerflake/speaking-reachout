@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getLead, getLeadInteractions } from "@/lib/data";
+import { getLead, getLeadFollowups, getLeadInteractions } from "@/lib/data";
 import {
   ContactStatusBadge,
+  OriginBadge,
   SourceBadge,
   StatusBadge,
   TypeBadge,
@@ -12,9 +13,16 @@ import { OutreachManager } from "@/components/OutreachManager";
 import { BookingForm } from "@/components/BookingForm";
 import { ReachOutAgainButton } from "@/components/ReachOutAgainButton";
 import { AddNote } from "@/components/AddNote";
+import { FollowupsPanel } from "@/components/FollowupsPanel";
 import { ContactEmail } from "@/components/ContactEmail";
 import { ContactRelookup } from "@/components/ContactRelookup";
 import { contactResolverName } from "@/lib/contacts/resolver";
+import { FindContactsButton } from "@/components/FindContactsButton";
+import {
+  MAX_CONTACTS_PER_LEAD,
+  availableContactSources,
+} from "@/lib/contacts/multiSource";
+import { getEnv } from "@/lib/env";
 import { formatDate, formatDateTime, looksLikeRealEmail } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +38,10 @@ export default async function LeadDetailPage({
   const lead = await getLead(id);
   if (!lead) notFound();
 
-  const interactions = await getLeadInteractions(id);
+  const [interactions, followups] = await Promise.all([
+    getLeadInteractions(id),
+    getLeadFollowups(id),
+  ]);
   const hasRecurringBooking = lead.bookings.some((b) => b.is_recurring);
 
   // On-demand email lookup is available only when a paid provider is configured
@@ -54,6 +65,15 @@ export default async function LeadDetailPage({
           <TypeBadge type={lead.type} />
           <StatusBadge status={lead.status} />
           <SourceBadge source={lead.source} />
+          <OriginBadge
+            via={
+              lead.outreach
+                .filter((o) => o.status === "sent" && o.sent_at)
+                .sort((a, b) =>
+                  (a.sent_at as string).localeCompare(b.sent_at as string),
+                )[0]?.sent_via ?? null
+            }
+          />
         </div>
         <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-zinc-500">
           <span>
@@ -124,6 +144,15 @@ export default async function LeadDetailPage({
           {/* Contacts */}
           <section>
             <h2 className="mb-2 text-sm font-medium text-zinc-500">Contacts</h2>
+            <FindContactsButton
+              leadId={lead.id}
+              sources={availableContactSources()}
+              max={MAX_CONTACTS_PER_LEAD}
+              hunterAvailable={
+                Boolean(getEnv("HUNTER_API_KEY")) &&
+                Boolean(lead.website || lead.source_url)
+              }
+            />
             {lead.contacts.length === 0 ? (
               <p className="text-sm text-zinc-500">No contacts.</p>
             ) : (
@@ -189,6 +218,14 @@ export default async function LeadDetailPage({
           <section className="rounded-lg border border-zinc-200 bg-white p-4">
             <h2 className="mb-2 text-sm font-medium text-zinc-500">Status</h2>
             <StatusControl leadId={lead.id} current={lead.status} />
+          </section>
+
+          {/* Automated follow-ups */}
+          <section className="rounded-lg border border-zinc-200 bg-white p-4">
+            <h2 className="mb-2 text-sm font-medium text-zinc-500">
+              Follow-ups
+            </h2>
+            <FollowupsPanel sequences={followups} contacts={lead.contacts} />
           </section>
 
           {/* Bookings */}

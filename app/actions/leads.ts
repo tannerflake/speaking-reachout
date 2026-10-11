@@ -5,11 +5,14 @@ import { createClient } from "@/lib/supabase/server";
 import { getActiveRules, getActiveVoiceInjection, getLead } from "@/lib/data";
 import { generateOutreach } from "@/lib/claude/outreach";
 import { pickPrimaryContact, statusLabel } from "@/lib/utils";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { stopSequencesForLead } from "@/lib/followups/run";
+import { FOLLOWUP_ELIGIBLE_STATUSES } from "@/lib/followups/cadence";
 import type { LeadStatus } from "@/lib/types";
 
 async function logInteraction(
   leadId: string,
-  kind: "status_change" | "note" | "email_sent" | "discovered",
+  kind: "status_change" | "note" | "email_sent" | "followup_sent" | "discovered",
   detail: string,
 ) {
   const supabase = await createClient();
@@ -28,6 +31,16 @@ export async function updateLeadStatus(
   if (error) throw new Error(error.message);
 
   await logInteraction(leadId, "status_change", `Status set to ${statusLabel(status)}.`);
+
+  // Moving a lead past (or back before) the outreach stage ends any automated
+  // follow-ups: a human has taken over.
+  if (!FOLLOWUP_ELIGIBLE_STATUSES.includes(status)) {
+    await stopSequencesForLead(
+      createAdminClient(),
+      leadId,
+      `Status set to ${statusLabel(status)}.`,
+    );
+  }
   revalidatePath(`/admin/leads/${leadId}`);
   revalidatePath("/admin/leads");
   revalidatePath("/admin/admin");
@@ -88,8 +101,9 @@ export async function saveBooking(
   });
   if (error) return { error: error.message };
 
-  // Ensure the lead is marked booked.
+  // Ensure the lead is marked booked (and end any automated follow-ups).
   await supabase.from("leads").update({ status: "booked" }).eq("id", leadId);
+  await stopSequencesForLead(createAdminClient(), leadId, "Booked.");
   await logInteraction(
     leadId,
     "status_change",
