@@ -199,8 +199,9 @@ Apply `supabase/migrations/0020_followups.sql` before using this.
   press "Send Drafts", choosing a spread (15 min to 2 hours). Drafts are
   marked `queued` with a `scheduled_for` time, at least 20s apart with jitter
   (`lib/outreach/send.ts`). The Leads page drains due emails every 20s while
-  open; `/api/cron/send-queue` (every 10 minutes in `vercel.json`, Pro plan
-  cadence; Hobby runs crons at most daily) drains them otherwise. A rolling
+  open; `/api/cron/send-queue` (daily at 16:00 UTC in `vercel.json`, the most the
+  Hobby plan allows; on Pro you can change it to `*/10 * * * *`) catches
+  anything left over. A rolling
   cap of 300 sends per 24h applies. "Cancel remaining" returns queued emails
   to draft. Apply `supabase/migrations/0022_send_queue.sql` first.
 - **Who sent it** → `outreach.sent_via` (`app` | `gmail`). The app writes `app`
