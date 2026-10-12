@@ -221,6 +221,41 @@ Apply `supabase/migrations/0020_followups.sql` before using this.
 
 ---
 
+## 8. Engagement guard (never email an org we're already talking to)
+
+Before any email leaves the app, [`lib/outreach/guard.ts`](lib/outreach/guard.ts)
+resolves the **organization** behind the lead and refuses to send if that
+organization is already in a conversation, wherever that conversation lives:
+
+1. **Same org, different lead row.** Leads that share a registrable domain
+   (website or any contact's institutional email) or whose normalized names
+   contain one another are treated as one organization. "Trinity University"
+   and "Trinity University Distinguished Lecture Series" are the same school.
+2. **CRM signals across the whole org:** a lead that is Interested, Booked,
+   Closed, Closed (Not Me), or Not interested; any recorded reply; any
+   outreach that was sent by hand from Gmail and imported.
+3. **Live mailbox check:** any human reply from the domain in the last year
+   (bounces and out-of-office auto-replies don't count), or any email to the
+   domain that this app did not send (Jeff or Cheryl reached out by hand).
+
+The guard runs in the single send path (`sendOutreachRow`), so it covers
+one-click sends, "send all", the throttled queue, and the cron drainer. It
+also runs before every automated follow-up, so a reply from one person at a
+school stops the nudges to their colleagues. It **fails closed**: if Gmail
+can't be checked, nothing is sent and queued rows wait.
+
+A refused email is parked as **Blocked** with the reason, and a red banner on
+the lead page lists every conflict with links to the sibling lead. Nothing
+retries it automatically. The only way to send anyway is the operator's
+**Override & send** on that one draft, which requires a typed reason that is
+stored on the row and written to the Activity log. "Reach out again" on a
+recurring venue sets that override up front, since re-engaging is the point.
+
+Migration: [`supabase/migrations/0024_engagement_guard.sql`](supabase/migrations/0024_engagement_guard.sql)
+adds the `blocked` status and the override columns. Until it is applied the
+guard still refuses to send; it just records the refusal as `failed` with a
+`BLOCKED:` prefix and overrides can't be saved.
+
 ## Deploying to Vercel
 
 1. Push the repo and import it in Vercel.
@@ -245,8 +280,9 @@ limit. Locally there is no such cap.
   prompts Claude (web search) for real, sourced venues in chunks (degrades
   gracefully — returns what succeeds), applies active `discovery_filter` /
   `targeting` rules in the prompt _and_ as a post-filter, dedups against the DB
-  by normalized name and website domain, resolves a contact per lead, and
-  inserts survivors as `new`.
+  by normalized name and registrable domain (website or any existing
+  contact's institutional email), resolves a contact per lead, and inserts
+  survivors as `new`.
 - **Draft & send** → [`lib/claude/outreach.ts`](lib/claude/outreach.ts): a
   researched, tailored email (subject + body) honoring active `copy_style`
   rules, with a deterministic post-generation style check

@@ -6,7 +6,7 @@ import {
 } from "@/lib/claude/rules";
 import { getInlineContactResolver } from "@/lib/contacts/resolver";
 import type { DiscoveredLead, LeadType, TailoringRule } from "@/lib/types";
-import { domainFromUrl, normalizeName } from "@/lib/utils";
+import { domainFromUrl, normalizeName, registrableDomain } from "@/lib/utils";
 
 const LEAD_TYPES: LeadType[] = ["event", "institution", "other"];
 const CHUNK_SIZE = 12;
@@ -147,11 +147,14 @@ export async function discoverLeads(params: {
       if (reserved >= target) break;
       const key = normalizeName(c.name);
       const domain = domainFromUrl(c.website) ?? domainFromUrl(c.source_url);
+      const reg = registrableDomain(domain);
       if (!key) continue;
       if (seenNames.has(key)) continue;
       if (domain && seenDomains.has(domain)) continue;
+      if (reg && seenDomains.has(reg)) continue;
       seenNames.add(key);
       if (domain) seenDomains.add(domain);
+      if (reg) seenDomains.add(reg);
       reserved += 1;
       // --- end critical section ---
 

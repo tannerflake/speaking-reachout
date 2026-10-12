@@ -3,13 +3,16 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { OriginBadge, OutreachStatusBadge } from "@/components/Badge";
+import Link from "next/link";
 import {
   approveAndSend,
   draftForAllContacts,
   generateDraft,
+  overrideAndSend,
   regenerateDraft,
   updateDraft,
 } from "@/app/actions/outreach";
+import type { EngagementGuardResult } from "@/lib/outreach/guard";
 import type { Contact, Outreach } from "@/lib/types";
 import {
   formatDateTime,
@@ -23,16 +26,29 @@ interface Buf {
   body: string;
 }
 
+/** Serializable guard verdict computed on the server for the lead page. */
+export type GuardView =
+  | { kind: "ok"; result: EngagementGuardResult }
+  | { kind: "blocked"; result: EngagementGuardResult }
+  | { kind: "unavailable"; error: string };
+
 export function OutreachManager({
   leadId,
   contacts,
   outreach,
+  guard,
 }: {
   leadId: string;
   contacts: Contact[];
   outreach: Outreach[];
+  guard: GuardView;
 }) {
   const primary = pickPrimaryContact(contacts);
+  // Blocked or unknown: drafting is off until the operator acknowledges, and
+  // every send needs a recorded override (the server enforces both).
+  const guardBlocked = guard.kind !== "ok";
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [overrideReasons, setOverrideReasons] = useState<Record<string, string>>({});
   const [contactId, setContactId] = useState<string>(primary?.id ?? "");
   const [newOneOff, setNewOneOff] = useState("");
   const [bufs, setBufs] = useState<Record<string, Buf>>({});
@@ -77,6 +93,7 @@ export function OutreachManager({
         leadId,
         contactId || null,
         newOneOff.trim() || undefined,
+        { acknowledgeConflict: acknowledged },
       );
       setBusyId(null);
       if (res.error) {
@@ -96,11 +113,47 @@ export function OutreachManager({
   const uncovered = contacts.filter(
     (c) => looksLikeRealEmail(c.email) && !coveredIds.has(c.id),
   );
+  // When the org is in conversation, only drafts carrying an operator
+  // override are sendable in bulk; the rest need an individual override.
   const sendable = outreach.filter(
     (o) =>
       o.status !== "sent" &&
+      (!guardBlocked || Boolean(o.guard_override_at)) &&
       looksLikeRealEmail(contacts.find((c) => c.id === o.contact_id)?.email),
   );
+
+  function sendWithOverride(item: Outreach) {
+    const reason = (overrideReasons[item.id] ?? "").trim();
+    const email = contactFor(item)?.email ?? "this contact";
+    ask(
+      `Send to ${email} even though this organization is already in a conversation?\n\nReason recorded: ${reason}`,
+      () => {
+        clearMsgs();
+        setBusyId(item.id);
+        start(async () => {
+          const buf = getBuf(item);
+          if (buf.subject !== item.subject || buf.body !== item.body) {
+            const upd = await updateDraft(item.id, buf.subject, buf.body);
+            if (upd.error) {
+              setBusyId(null);
+              setError(upd.error);
+              return;
+            }
+          }
+          const res = await overrideAndSend(item.id, reason);
+          setBusyId(null);
+          if (res.error) {
+            setError(res.error);
+            router.refresh();
+            return;
+          }
+          clearBuf(item.id);
+          setMessage("Sent with override ✓ (logged in Activity).");
+          router.refresh();
+        });
+      },
+    );
+  }
 
   function draftAll() {
     clearMsgs();
@@ -109,6 +162,7 @@ export function OutreachManager({
       const res = await draftForAllContacts(
         leadId,
         newOneOff.trim() || undefined,
+        { acknowledgeConflict: acknowledged },
       );
       setBusyId(null);
       if (res.error) {
@@ -259,6 +313,88 @@ export function OutreachManager({
 
   return (
     <div className="space-y-4">
+      {guard.kind === "blocked" && (
+        <div className="rounded-lg border-2 border-rose-300 bg-rose-50 p-4">
+          <p className="text-sm font-semibold text-rose-800">
+            Do not send: this organization is already in a conversation.
+          </p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-rose-800">
+            {guard.result.conflicts.map((c, i) => (
+              <li key={i}>
+                {c.detail}
+                {c.leadId && c.leadId !== leadId && (
+                  <>
+                    {" "}
+                    <Link
+                      href={`/admin/leads/${c.leadId}`}
+                      className="font-medium underline"
+                    >
+                      Open that lead
+                    </Link>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+          {guard.result.siblings.length > 0 && (
+            <p className="mt-2 text-xs text-rose-700">
+              Same organization in the CRM:{" "}
+              {guard.result.siblings.map((sib, i) => (
+                <span key={sib.id}>
+                  {i > 0 ? ", " : ""}
+                  <Link href={`/admin/leads/${sib.id}`} className="underline">
+                    {sib.name}
+                  </Link>
+                </span>
+              ))}
+              . Consider merging or marking the duplicate as Junk.
+            </p>
+          )}
+          <p className="mt-2 text-xs text-rose-700">
+            Checked: {guard.result.domains.map((d) => `@${d}`).join(", ") || "name only"}
+            {guard.result.gmailChecked ? " and the Gmail mailbox." : "."}{" "}
+            New drafts are off and nothing here can be sent without a recorded
+            reason.
+          </p>
+          {!acknowledged && (
+            <button
+              onClick={() => setAcknowledged(true)}
+              className="mt-3 rounded-md border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-800 hover:bg-rose-100"
+            >
+              I understand, let me draft anyway
+            </button>
+          )}
+        </div>
+      )}
+      {guard.kind === "unavailable" && (
+        <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-semibold">
+            Could not check whether this organization is already in a
+            conversation.
+          </p>
+          <p className="mt-1 text-xs">{guard.error}</p>
+          <p className="mt-1 text-xs">
+            Sending is refused until the mailbox can be checked. Reconnect
+            Gmail in Settings and reload.
+          </p>
+        </div>
+      )}
+      {guard.kind === "ok" && guard.result.siblings.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Possible duplicate: the CRM also has{" "}
+          {guard.result.siblings.map((sib, i) => (
+            <span key={sib.id}>
+              {i > 0 ? ", " : ""}
+              <Link href={`/admin/leads/${sib.id}`} className="font-medium underline">
+                {sib.name}
+              </Link>
+            </span>
+          ))}{" "}
+          for the same organization. Nothing there is in conversation yet, but
+          sending from both leads would double up.
+        </div>
+      )}
+
       {/* New draft controls */}
       <div className="rounded-lg border border-zinc-200 bg-white p-4">
         <div className="flex flex-wrap items-end gap-3">
@@ -294,7 +430,7 @@ export function OutreachManager({
           </div>
           <button
             onClick={draftNew}
-            disabled={pending}
+            disabled={pending || (guardBlocked && !acknowledged)}
             className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
           >
             {busyId === "new" && pending ? "Drafting…" : "Draft Outreach"}
@@ -302,7 +438,7 @@ export function OutreachManager({
           {uncovered.length > 1 && (
             <button
               onClick={draftAll}
-              disabled={pending}
+              disabled={pending || (guardBlocked && !acknowledged)}
               className="rounded-md border border-blue-600 bg-white px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-60"
             >
               {busyId === "all" && pending
@@ -362,6 +498,10 @@ export function OutreachManager({
             const hasEmail = looksLikeRealEmail(contact?.email);
             const editable = item.status !== "sent";
             const isBusy = busyId === item.id && pending;
+            const needsOverride =
+              editable &&
+              !item.guard_override_at &&
+              (guard.kind === "blocked" || item.status === "blocked");
 
             return (
               <div
@@ -425,15 +565,52 @@ export function OutreachManager({
                         Last send failed: {item.error}
                       </p>
                     )}
+                    {item.status === "blocked" && (
+                      <p className="text-xs font-medium text-rose-700">
+                        Blocked by the engagement guard: {item.error}
+                      </p>
+                    )}
+                    {item.guard_override_at && (
+                      <p className="text-xs text-amber-700">
+                        Override recorded: {item.guard_override_reason}
+                      </p>
+                    )}
 
                     <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        onClick={() => send(item)}
-                        disabled={isBusy || !hasEmail}
-                        className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {isBusy ? "Working…" : "Approve & Send"}
-                      </button>
+                      {needsOverride ? (
+                        <>
+                          <input
+                            value={overrideReasons[item.id] ?? ""}
+                            onChange={(e) =>
+                              setOverrideReasons((p) => ({
+                                ...p,
+                                [item.id]: e.target.value,
+                              }))
+                            }
+                            placeholder="Why send despite the existing conversation?"
+                            className="min-w-64 flex-1 rounded-md border border-rose-300 px-2 py-1.5 text-sm"
+                          />
+                          <button
+                            onClick={() => sendWithOverride(item)}
+                            disabled={
+                              isBusy ||
+                              !hasEmail ||
+                              (overrideReasons[item.id] ?? "").trim().length < 8
+                            }
+                            className="rounded-md bg-rose-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-800 disabled:opacity-60"
+                          >
+                            {isBusy ? "Working…" : "Override & send"}
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => send(item)}
+                          disabled={isBusy || !hasEmail || guard.kind === "unavailable"}
+                          className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+                        >
+                          {isBusy ? "Working…" : "Approve & Send"}
+                        </button>
+                      )}
                       <button
                         onClick={() => save(item)}
                         disabled={isBusy}

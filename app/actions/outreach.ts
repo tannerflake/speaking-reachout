@@ -13,8 +13,30 @@ import {
   type QueueResult,
   type QueueStatus,
 } from "@/lib/outreach/send";
+import {
+  checkEngagementGuard,
+  summarizeConflicts,
+  type EngagementGuardResult,
+} from "@/lib/outreach/guard";
 import { looksLikeRealEmail, pickPrimaryContact } from "@/lib/utils";
 import type { Contact, Outreach } from "@/lib/types";
+
+/**
+ * Drafting preflight: CRM-level engagement check (no mailbox call) so we
+ * don't spend a researched generation on an org we must not email. The
+ * operator can acknowledge the conflict to draft anyway; sending still
+ * requires a recorded override on the row.
+ */
+async function draftingBlocked(
+  leadId: string,
+  acknowledged: boolean | undefined,
+): Promise<string | null> {
+  if (acknowledged) return null;
+  const supabase = await createClient();
+  const guard = await checkEngagementGuard(supabase, leadId, { skipGmail: true });
+  if (!guard.blocked) return null;
+  return `Not drafted. ${summarizeConflicts(guard)} Use "Draft anyway" if this is deliberate.`;
+}
 
 export interface DraftResult {
   id?: string;
@@ -26,9 +48,12 @@ export async function generateDraft(
   leadId: string,
   contactId?: string | null,
   oneOff?: string,
+  opts?: { acknowledgeConflict?: boolean },
 ): Promise<DraftResult> {
   const lead = await getLead(leadId);
   if (!lead) return { error: "Lead not found." };
+  const blockedReason = await draftingBlocked(leadId, opts?.acknowledgeConflict);
+  if (blockedReason) return { error: blockedReason };
   const [rules, voiceInjection] = await Promise.all([
     getActiveRules(),
     getActiveVoiceInjection(),
@@ -146,13 +171,70 @@ export async function regenerateDraft(
 
 export async function approveAndSend(
   outreachId: string,
-): Promise<{ error?: string; ok?: boolean }> {
+): Promise<{ error?: string; ok?: boolean; blocked?: boolean }> {
   const supabase = await createClient();
   const res = await sendOutreachRow(supabase, outreachId);
   if (res.leadId) revalidatePath(`/admin/leads/${res.leadId}`);
   revalidatePath("/admin/leads");
   revalidatePath("/admin");
-  return res.ok ? { ok: true } : { error: res.error };
+  return res.ok ? { ok: true } : { error: res.error, blocked: res.blocked };
+}
+
+/** The engagement guard's verdict for a lead, for the lead page banner. */
+export async function engagementStatus(
+  leadId: string,
+): Promise<EngagementGuardResult | { error: string }> {
+  const supabase = await createClient();
+  try {
+    return await checkEngagementGuard(supabase, leadId);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Check failed." };
+  }
+}
+
+/**
+ * Operator override: send one draft even though the organization is already
+ * in a conversation. Requires a reason, which is stored on the row and
+ * written to the activity log. The only way a blocked email ever goes out.
+ */
+export async function overrideAndSend(
+  outreachId: string,
+  reason: string,
+): Promise<{ error?: string; ok?: boolean }> {
+  const trimmed = reason.trim();
+  if (trimmed.length < 8) {
+    return { error: "Give a reason for sending despite the existing conversation (at least a few words)." };
+  }
+  const supabase = await createClient();
+  const { data: existing } = await supabase
+    .from("outreach")
+    .select("id, lead_id, status")
+    .eq("id", outreachId)
+    .single();
+  if (!existing) return { error: "Draft not found." };
+  const row = existing as { lead_id: string; status: string };
+  if (row.status === "sent") return { error: "Already sent." };
+
+  const { error } = await supabase
+    .from("outreach")
+    .update({
+      status: "draft",
+      error: null,
+      guard_override_reason: trimmed,
+      guard_override_at: new Date().toISOString(),
+    })
+    .eq("id", outreachId);
+  if (error) {
+    return {
+      error: `Could not record the override (${error.message}). Has migration 0024 been applied?`,
+    };
+  }
+  await supabase.from("interactions").insert({
+    lead_id: row.lead_id,
+    kind: "note",
+    detail: `Engagement guard overridden by the operator for one draft: ${trimmed}`,
+  });
+  return approveAndSend(outreachId);
 }
 
 /**
@@ -243,9 +325,12 @@ function personalize(body: string, contact: Contact): string {
 export async function draftForAllContacts(
   leadId: string,
   oneOff?: string,
+  opts?: { acknowledgeConflict?: boolean },
 ): Promise<{ created: number; error?: string; styleAdjusted?: boolean }> {
   const lead = await getLead(leadId);
   if (!lead) return { created: 0, error: "Lead not found." };
+  const blockedReason = await draftingBlocked(leadId, opts?.acknowledgeConflict);
+  if (blockedReason) return { created: 0, error: blockedReason };
 
   const covered = new Set(
     lead.outreach.map((o) => o.contact_id).filter(Boolean) as string[],

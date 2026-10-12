@@ -137,8 +137,17 @@ export function LeadsView({
       setQueue(status);
       if (status.due > 0) {
         const res = await drainSendQueue();
-        if (res.sent || res.failed) {
+        if (res.sent || res.failed || res.blocked || res.deferred) {
           setQueue(await sendQueueStatus());
+          if (res.blocked) {
+            setMsg(
+              `${res.blocked} queued email${res.blocked === 1 ? " was" : "s were"} blocked: the organization is already in a conversation. Open the lead to see why.`,
+            );
+          } else if (res.deferred) {
+            setMsg(
+              `Sending paused: the mailbox could not be checked for existing conversations. It will retry shortly. ${res.errors[0] ?? ""}`,
+            );
+          }
           router.refresh();
         }
       }
@@ -413,17 +422,25 @@ export function LeadsView({
             setMsg(`Could not queue: ${res.error}`);
           } else if (res.queued === 0) {
             setMsg(
-              `Nothing to send: no unsent drafts with a contact email on the selected leads${
-                res.skipped
-                  ? ` (${res.skipped} draft${res.skipped === 1 ? "" : "s"} lack a valid email)`
-                  : ""
-              }. Use "Find contacts + draft" first.`,
+              res.blocked
+                ? `Nothing queued: ${res.blocked} draft${res.blocked === 1 ? " was" : "s were"} blocked because the organization is already in a conversation${
+                    res.skipped ? `, and ${res.skipped} lack a valid email` : ""
+                  }. Open the lead to see why.`
+                : `Nothing to send: no unsent drafts with a contact email on the selected leads${
+                    res.skipped
+                      ? ` (${res.skipped} draft${res.skipped === 1 ? "" : "s"} lack a valid email)`
+                      : ""
+                  }. Use "Find contacts + draft" first.`,
             );
           } else {
             setMsg(
               `Queued ${res.queued} email${res.queued === 1 ? "" : "s"}; the last one goes out around ${
                 res.finishesAt ? clock(res.finishesAt) : "soon"
-              }${res.skipped ? `. ${res.skipped} skipped for missing email` : ""}.`,
+              }${res.skipped ? `. ${res.skipped} skipped for missing email` : ""}${
+                res.blocked
+                  ? `. ${res.blocked} blocked: already in conversation with that organization`
+                  : ""
+              }.`,
             );
           }
           setSelected(new Set());

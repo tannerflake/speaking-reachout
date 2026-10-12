@@ -151,6 +151,11 @@ export async function reachOutAgain(
         subject: generated.subject,
         body: generated.body,
         status: "draft",
+        // Re-engaging a venue we've worked with is the one deliberate case
+        // where "already in conversation" is the point, so the engagement
+        // guard is overridden up front and the override is logged.
+        guard_override_reason: "Reach out again: recurring venue",
+        guard_override_at: new Date().toISOString(),
       })
       .select("id")
       .single();
@@ -159,7 +164,7 @@ export async function reachOutAgain(
     await logInteraction(
       leadId,
       "note",
-      "Started a new outreach cycle (recurring venue).",
+      "Started a new outreach cycle (recurring venue). Engagement guard overridden for this draft: recurring venue.",
     );
     revalidatePath(`/admin/leads/${leadId}`);
     return { outreachId: (data as { id: string }).id };

@@ -10,7 +10,12 @@ import {
   TypeBadge,
 } from "@/components/Badge";
 import { StatusControl } from "@/components/StatusControl";
-import { OutreachManager } from "@/components/OutreachManager";
+import { OutreachManager, type GuardView } from "@/components/OutreachManager";
+import { createClient } from "@/lib/supabase/server";
+import {
+  EngagementGuardUnavailableError,
+  checkEngagementGuard,
+} from "@/lib/outreach/guard";
 import { BookingForm } from "@/components/BookingForm";
 import { ReachOutAgainButton } from "@/components/ReachOutAgainButton";
 import { AddNote } from "@/components/AddNote";
@@ -30,6 +35,27 @@ export const dynamic = "force-dynamic";
 // Drafting/sending outreach runs web-search generations — give it headroom.
 export const maxDuration = 300;
 
+/**
+ * Engagement guard verdict for the banner: CRM siblings plus the live
+ * mailbox. The send path re-runs the same check, so this is advisory for
+ * the operator and never the only line of defense.
+ */
+async function loadGuard(leadId: string): Promise<GuardView> {
+  try {
+    const supabase = await createClient();
+    const result = await checkEngagementGuard(supabase, leadId);
+    return { kind: result.blocked ? "blocked" : "ok", result };
+  } catch (e) {
+    const error =
+      e instanceof EngagementGuardUnavailableError
+        ? e.message
+        : e instanceof Error
+          ? e.message
+          : "Check failed.";
+    return { kind: "unavailable", error };
+  }
+}
+
 export default async function LeadDetailPage({
   params,
 }: {
@@ -39,9 +65,10 @@ export default async function LeadDetailPage({
   const lead = await getLead(id);
   if (!lead) notFound();
 
-  const [interactions, followups] = await Promise.all([
+  const [interactions, followups, guard] = await Promise.all([
     getLeadInteractions(id),
     getLeadFollowups(id),
+    loadGuard(id),
   ]);
   const hasRecurringBooking = lead.bookings.some((b) => b.is_recurring);
 
@@ -214,6 +241,7 @@ export default async function LeadDetailPage({
               leadId={lead.id}
               contacts={lead.contacts}
               outreach={lead.outreach}
+              guard={guard}
             />
           </section>
         </div>

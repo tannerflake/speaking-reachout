@@ -2,6 +2,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { generateFollowup } from "@/lib/claude/followup";
 import { GmailNotConnectedError, sendGmail } from "@/lib/gmail/send";
 import { getThreadState } from "@/lib/gmail/thread";
+import {
+  EngagementGuardUnavailableError,
+  checkEngagementGuard,
+  summarizeConflicts,
+} from "@/lib/outreach/guard";
 import { looksLikeRealEmail, statusLabel } from "@/lib/utils";
 import {
   FOLLOWUP_ELIGIBLE_STATUSES,
@@ -201,6 +206,32 @@ async function processSequence(
   if (!looksLikeRealEmail(email)) {
     await stop(admin, seq, "Contact has no valid email.");
     return "stopped";
+  }
+
+  // Guard 3b: the ORGANIZATION must not be in a conversation anywhere: a
+  // sibling lead, a colleague who replied to a different thread, or a thread
+  // Jeff started by hand. Fails closed (error recorded, retried next run).
+  try {
+    const guard = await checkEngagementGuard(admin, lead.id, { contactEmail: email });
+    if (guard.blocked) {
+      const reason = summarizeConflicts(guard);
+      await stop(
+        admin,
+        seq,
+        "Organization is already in conversation.",
+        `Follow-ups to ${email} stopped. ${reason}`,
+      );
+      return "stopped";
+    }
+  } catch (e) {
+    if (e instanceof EngagementGuardUnavailableError) {
+      await admin
+        .from("followup_sequences")
+        .update({ last_error: e.message })
+        .eq("id", seq.id);
+      throw new Error(`${lead.name}: ${e.message}`);
+    }
+    throw e;
   }
 
   // Guard 4: live thread check. Never follow up on a thread that already

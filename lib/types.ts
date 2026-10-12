@@ -46,7 +46,12 @@ export type LeadSource = "outbound" | "website_inbound";
 
 export type ContactStatus = "verified" | "unverified" | "needs_lookup";
 
-export type OutreachStatus = "draft" | "queued" | "sent" | "failed";
+/**
+ * "blocked" = the engagement guard refused to send because the organization
+ * is already in a conversation (see lib/outreach/guard.ts). Never retried
+ * automatically; only an explicit operator override can send it.
+ */
+export type OutreachStatus = "draft" | "queued" | "sent" | "failed" | "blocked";
 
 /**
  * How an outreach email left the building: sent by this app, or sent by hand
@@ -119,6 +124,12 @@ export interface Outreach {
   sequence_step: number;
   /** The initial outreach this follow-up belongs to (null on step 0). */
   parent_outreach_id: string | null;
+  /**
+   * Set when the operator explicitly chose to send despite the engagement
+   * guard reporting an existing conversation. Null for every normal send.
+   */
+  guard_override_reason: string | null;
+  guard_override_at: string | null;
   created_at: string;
 }
 

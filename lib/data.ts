@@ -1,6 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { domainFromUrl, looksLikeRealEmail, normalizeName } from "@/lib/utils";
+import {
+  domainFromUrl,
+  looksLikeRealEmail,
+  normalizeName,
+  orgDomainOfEmail,
+  registrableDomain,
+} from "@/lib/utils";
 import type {
   Booking,
   Contact,
@@ -328,14 +334,23 @@ export async function getExistingLeadKeys(): Promise<{
     names.add(key);
   };
 
-  const [leads, engagements, inbound] = await Promise.all([
+  const [leads, engagements, inbound, contacts] = await Promise.all([
     admin.from("leads").select("name, name_normalized, website"),
     admin
       .from("site_content")
       .select("data")
       .eq("section_key", "engagement"),
     admin.from("inbound_leads").select("organization"),
+    admin.from("contacts").select("email"),
   ]);
+
+  // A contact's institutional email identifies the org as well as its
+  // website does; without this, "X University" and "Lecture Series at X"
+  // can both land in the CRM.
+  for (const row of contacts.data ?? []) {
+    const d = orgDomainOfEmail((row as { email: string | null }).email);
+    if (d) domains.add(d);
+  }
 
   for (const row of leads.data ?? []) {
     const r = row as {
@@ -346,7 +361,11 @@ export async function getExistingLeadKeys(): Promise<{
     addName(r.name);
     if (r.name_normalized) names.add(r.name_normalized);
     const d = domainFromUrl(r.website);
-    if (d) domains.add(d);
+    if (d) {
+      domains.add(d);
+      const reg = registrableDomain(d);
+      if (reg) domains.add(reg);
+    }
   }
 
   for (const row of engagements.data ?? []) {

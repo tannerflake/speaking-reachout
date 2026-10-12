@@ -24,6 +24,56 @@ export function domainFromUrl(input: string | null | undefined): string | null {
   }
 }
 
+/**
+ * Collapse a hostname to the domain an organization owns: "law.harvard.edu"
+ * -> "harvard.edu", "cs.ox.ac.uk" -> "ox.ac.uk". Two leads or contacts that
+ * share this are treated as the same organization by the engagement guard.
+ */
+export function registrableDomain(host: string | null | undefined): string | null {
+  if (!host) return null;
+  const h = host.toLowerCase().trim().replace(/^www\./, "");
+  if (!h || !h.includes(".")) return null;
+  const parts = h.split(".").filter(Boolean);
+  if (parts.length <= 2) return parts.join(".");
+  const tld = parts[parts.length - 1];
+  const second = parts[parts.length - 2];
+  // Country-code second-level registries (edu.au, ac.uk, co.jp, ...).
+  if (tld.length === 2 && SECOND_LEVEL.has(second)) return parts.slice(-3).join(".");
+  return parts.slice(-2).join(".");
+}
+
+const SECOND_LEVEL = new Set(["edu", "ac", "co", "com", "org", "net", "gov", "or", "ne"]);
+
+/** Personal mailbox providers: an address there says nothing about the org. */
+export const GENERIC_EMAIL_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "yahoo.com",
+  "hotmail.com",
+  "outlook.com",
+  "live.com",
+  "msn.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "aol.com",
+  "protonmail.com",
+  "proton.me",
+  "comcast.net",
+  "att.net",
+  "verizon.net",
+]);
+
+/** Organization domain of an email address, or null for personal providers. */
+export function orgDomainOfEmail(email: string | null | undefined): string | null {
+  if (!email) return null;
+  const at = email.trim().toLowerCase().lastIndexOf("@");
+  if (at < 0) return null;
+  const d = registrableDomain(email.trim().toLowerCase().slice(at + 1));
+  if (!d || GENERIC_EMAIL_DOMAINS.has(d)) return null;
+  return d;
+}
+
 /** Mirror the SQL name_normalized generated column for app-side dedup. */
 export function normalizeName(name: string): string {
   return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "");
@@ -106,6 +156,7 @@ export function outreachStatusClasses(status: OutreachStatus): string {
     queued: "bg-indigo-50 text-indigo-700 border-indigo-200",
     sent: "bg-emerald-50 text-emerald-700 border-emerald-200",
     failed: "bg-rose-50 text-rose-700 border-rose-200",
+    blocked: "bg-rose-100 text-rose-800 border-rose-300",
   }[status];
 }
 
