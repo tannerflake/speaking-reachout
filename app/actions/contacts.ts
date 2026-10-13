@@ -7,6 +7,7 @@ import {
   MAX_CONTACTS_PER_LEAD,
   findContactsMultiSource,
 } from "@/lib/contacts/multiSource";
+import { personKey } from "@/lib/contacts/personKey";
 import { looksLikeRealEmail } from "@/lib/utils";
 import type { Contact } from "@/lib/types";
 
@@ -344,13 +345,14 @@ export async function findMultipleContacts(leadId: string): Promise<MultiFindRes
   const filled = await fillMissingEmails(supabase, lead, existing);
   let hunterUsedForExisting = filled > 0;
 
-  const slots =
-    MAX_CONTACTS_PER_LEAD - existing.filter((c) => looksLikeRealEmail(c.email)).length;
+  // The cap is on every contact, emailed or not. Counting only emailed ones
+  // let each run on a no-email org add another full batch.
+  const slots = MAX_CONTACTS_PER_LEAD - existing.length;
   if (slots <= 0) {
     return {
       ...empty,
       hunterUsed: hunterUsedForExisting,
-      error: `This lead already has ${MAX_CONTACTS_PER_LEAD} contacts with emails.`,
+      error: `This lead already has ${MAX_CONTACTS_PER_LEAD} contacts.`,
     };
   }
 
@@ -380,9 +382,38 @@ export async function findMultipleContacts(leadId: string): Promise<MultiFindRes
     };
   }
 
+  // The search takes a minute; another run (auto-enrich plus a button click)
+  // may have inserted contacts meanwhile. Re-read and keep only new people
+  // that still fit under the cap.
+  const { data: current } = await supabase
+    .from("contacts")
+    .select("name, email")
+    .eq("lead_id", lead.id);
+  const taken = current ?? [];
+  const takenKeys = new Set(taken.map((c) => personKey(c.name ?? "")).filter(Boolean));
+  const takenEmails = new Set(
+    taken.map((c) => c.email?.toLowerCase()).filter((e): e is string => Boolean(e)),
+  );
+  const toInsert = result.contacts
+    .filter(
+      (c) =>
+        !takenKeys.has(personKey(c.name)) &&
+        !(c.email && takenEmails.has(c.email.toLowerCase())),
+    )
+    .slice(0, Math.max(0, MAX_CONTACTS_PER_LEAD - taken.length));
+  if (toInsert.length === 0) {
+    return {
+      ...empty,
+      sources: result.succeeded,
+      failed: result.failed,
+      hunterUsed: hunterUsedForExisting,
+      error: "Another contact search already filled this lead.",
+    };
+  }
+
   const now = new Date().toISOString();
   const { error } = await supabase.from("contacts").insert(
-    result.contacts.map((c) => ({
+    toInsert.map((c) => ({
       lead_id: lead.id,
       name: c.name,
       role: c.role,
@@ -394,20 +425,20 @@ export async function findMultipleContacts(leadId: string): Promise<MultiFindRes
   );
   if (error) return { ...empty, error: error.message };
 
-  const withEmail = result.contacts.filter((c) => c.email).length;
-  const lines = result.contacts
+  const withEmail = toInsert.filter((c) => c.email).length;
+  const lines = toInsert
     .map((c) => `${c.name}${c.email ? ` <${c.email}>` : ""} [${c.sources.join(", ")}]`)
     .join("; ");
   await supabase.from("interactions").insert({
     lead_id: lead.id,
     kind: "note",
-    detail: `Found ${result.contacts.length} contacts (${withEmail} with email): ${lines}.`,
+    detail: `Found ${toInsert.length} contacts (${withEmail} with email): ${lines}.`,
   });
 
   revalidatePath(`/admin/leads/${lead.id}`);
   revalidatePath("/admin/leads");
   return {
-    added: result.contacts.length,
+    added: toInsert.length,
     withEmail,
     sources: result.succeeded,
     failed: result.failed,
