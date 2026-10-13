@@ -38,6 +38,7 @@ import type { LeadListRow } from "@/lib/data";
 import type { LeadStatus } from "@/lib/types";
 import { formatDateTime, statusLabel } from "@/lib/utils";
 import { useInlineConfirm } from "@/components/InlineConfirm";
+import { MultiSelect } from "@/components/MultiSelect";
 
 // Send-queue pacing options offered in the bulk bar (minutes to spread over).
 const SPREAD_OPTIONS = [
@@ -57,7 +58,8 @@ function clock(iso: string): string {
 }
 
 // "drafted" is a synthetic filter (new leads with an unsent draft), not a real
-// lead status — so the dropdown value is a status OR this sentinel.
+// lead status — so each selected value is a status OR this sentinel.
+// Status, source and sender filters are multi-select; an empty list means all.
 const STATUS_FILTER_KEY = "leads:statusFilter";
 const SOURCE_FILTER_KEY = "leads:sourceFilter";
 // Who started the conversation (commission): app / gmail / nothing sent yet.
@@ -83,9 +85,36 @@ function daysAgo(n: number): string {
 // Quick presets for the date range; "to" is left open so new activity keeps
 // showing up without touching the filter.
 const DATE_PRESETS = [
+  { label: "1d", days: 1 },
   { label: "7d", days: 7 },
   { label: "30d", days: 30 },
-  { label: "90d", days: 90 },
+];
+
+/**
+ * Read a saved multi-select filter. Older versions stored a single string
+ * ("" for all), so accept that too.
+ */
+function loadList(key: string): string[] | null {
+  const raw = localStorage.getItem(key);
+  if (raw === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.filter((v) => typeof v === "string");
+  } catch {
+    // legacy plain string
+  }
+  return raw ? [raw] : [];
+}
+
+const SOURCE_OPTIONS = [
+  { value: "website_inbound", label: "Via jeffflake.com" },
+  { value: "outbound", label: "Outbound" },
+];
+
+const ORIGIN_OPTIONS = [
+  { value: "app", label: "Sent via app" },
+  { value: "gmail", label: "Sent from Gmail" },
+  { value: "unsent", label: "Nothing sent yet" },
 ];
 
 export function LeadsView({
@@ -95,9 +124,11 @@ export function LeadsView({
   rows: LeadListRow[];
   initialStatus?: LeadStatus | "drafted";
 }) {
-  const [status, setStatus] = useState<string>(initialStatus ?? "");
-  const [source, setSource] = useState<string>("");
-  const [origin, setOrigin] = useState<string>("");
+  const [status, setStatus] = useState<string[]>(
+    initialStatus ? [initialStatus] : [],
+  );
+  const [source, setSource] = useState<string[]>([]);
+  const [origin, setOrigin] = useState<string[]>([]);
   const [search, setSearch] = useState<string>("");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
@@ -175,14 +206,14 @@ export function LeadsView({
   // otherwise restore the last selection from localStorage.
   useEffect(() => {
     if (initialStatus) {
-      localStorage.setItem(STATUS_FILTER_KEY, initialStatus);
+      localStorage.setItem(STATUS_FILTER_KEY, JSON.stringify([initialStatus]));
     } else {
-      const saved = localStorage.getItem(STATUS_FILTER_KEY);
+      const saved = loadList(STATUS_FILTER_KEY);
       if (saved) setStatus(saved);
     }
-    const savedSource = localStorage.getItem(SOURCE_FILTER_KEY);
+    const savedSource = loadList(SOURCE_FILTER_KEY);
     if (savedSource) setSource(savedSource);
-    const savedOrigin = localStorage.getItem(ORIGIN_FILTER_KEY);
+    const savedOrigin = loadList(ORIGIN_FILTER_KEY);
     if (savedOrigin) setOrigin(savedOrigin);
     const savedFrom = localStorage.getItem(DATE_FROM_KEY);
     if (savedFrom) setDateFrom(savedFrom);
@@ -190,19 +221,19 @@ export function LeadsView({
     if (savedTo) setDateTo(savedTo);
   }, [initialStatus]);
 
-  function changeStatus(value: string) {
+  function changeStatus(value: string[]) {
     setStatus(value);
-    localStorage.setItem(STATUS_FILTER_KEY, value);
+    localStorage.setItem(STATUS_FILTER_KEY, JSON.stringify(value));
   }
 
-  function changeSource(value: string) {
+  function changeSource(value: string[]) {
     setSource(value);
-    localStorage.setItem(SOURCE_FILTER_KEY, value);
+    localStorage.setItem(SOURCE_FILTER_KEY, JSON.stringify(value));
   }
 
-  function changeOrigin(value: string) {
+  function changeOrigin(value: string[]) {
     setOrigin(value);
-    localStorage.setItem(ORIGIN_FILTER_KEY, value);
+    localStorage.setItem(ORIGIN_FILTER_KEY, JSON.stringify(value));
   }
 
   function changeDateRange(from: string, to: string) {
@@ -225,15 +256,24 @@ export function LeadsView({
         if (fromMs !== null && t < fromMs) return false;
         if (toMs !== null && t > toMs) return false;
       }
-      if (status === "drafted") {
-        if (!(r.status === "new" && r.hasUnsentDraft)) return false;
-      } else if (status && r.status !== status) {
+      // Within one filter the selected values are OR'd; filters are AND'd.
+      if (
+        status.length > 0 &&
+        !status.some((s) =>
+          s === "drafted"
+            ? r.status === "new" && r.hasUnsentDraft
+            : r.status === s,
+        )
+      ) {
         return false;
       }
-      if (source && r.source !== source) return false;
-      if (origin === "unsent") {
-        if (r.originatedVia) return false;
-      } else if (origin && r.originatedVia !== origin) {
+      if (source.length > 0 && !source.includes(r.source)) return false;
+      if (
+        origin.length > 0 &&
+        !origin.some((o) =>
+          o === "unsent" ? !r.originatedVia : r.originatedVia === o,
+        )
+      ) {
         return false;
       }
       if (q && !r.name.toLowerCase().includes(q)) return false;
@@ -582,39 +622,36 @@ export function LeadsView({
           placeholder="Search by name…"
           className={`${selectClass} min-w-48 flex-1`}
         />
-        <select
+        <MultiSelect
           value={status}
-          onChange={(e) => changeStatus(e.target.value)}
+          onChange={changeStatus}
+          options={[
+            { value: "drafted", label: "Drafted" },
+            ...LEAD_STATUSES.map((s) => ({ value: s, label: statusLabel(s) })),
+          ]}
+          allLabel="All statuses"
+          noun="statuses"
+          ariaLabel="Filter by status"
           className={selectClass}
-        >
-          <option value="">All statuses</option>
-          <option value="drafted">Drafted</option>
-          {LEAD_STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {statusLabel(s)}
-            </option>
-          ))}
-        </select>
-        <select
+        />
+        <MultiSelect
           value={source}
-          onChange={(e) => changeSource(e.target.value)}
+          onChange={changeSource}
+          options={SOURCE_OPTIONS}
+          allLabel="All sources"
+          noun="sources"
+          ariaLabel="Filter by source"
           className={selectClass}
-        >
-          <option value="">All sources</option>
-          <option value="website_inbound">Via jeffflake.com</option>
-          <option value="outbound">Outbound</option>
-        </select>
-        <select
+        />
+        <MultiSelect
           value={origin}
-          onChange={(e) => changeOrigin(e.target.value)}
+          onChange={changeOrigin}
+          options={ORIGIN_OPTIONS}
+          allLabel="All senders"
+          noun="senders"
+          ariaLabel="Filter by who sent the first outreach"
           className={selectClass}
-          aria-label="Filter by who sent the first outreach"
-        >
-          <option value="">All senders</option>
-          <option value="app">Sent via app</option>
-          <option value="gmail">Sent from Gmail</option>
-          <option value="unsent">Nothing sent yet</option>
-        </select>
+        />
         <div
           className="flex items-center gap-1 text-sm text-zinc-600"
           role="group"
