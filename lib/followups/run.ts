@@ -8,6 +8,11 @@ import {
   summarizeConflicts,
 } from "@/lib/outreach/guard";
 import { looksLikeRealEmail, statusLabel } from "@/lib/utils";
+import { scanInboxForReplies, type ScanSummary } from "@/lib/gmail/replyScan";
+import {
+  stopFollowupsForOrganization,
+  stopSequencesForLead,
+} from "@/lib/followups/stop";
 import {
   FOLLOWUP_ELIGIBLE_STATUSES,
   MAX_FOLLOWUPS,
@@ -32,6 +37,8 @@ export interface RunSummary {
   sent: number;
   stopped: number;
   errors: string[];
+  /** The inbox scan that runs before any follow-up goes out. */
+  replyScan?: ScanSummary;
 }
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -57,19 +64,6 @@ export async function startSequence(
     },
     { onConflict: "outreach_id", ignoreDuplicates: true },
   );
-}
-
-/** Stop every active/paused sequence on a lead (e.g. status moved on). */
-export async function stopSequencesForLead(
-  admin: Admin,
-  leadId: string,
-  reason: string,
-): Promise<void> {
-  await admin
-    .from("followup_sequences")
-    .update({ status: "stopped", stop_reason: reason, next_due_at: null })
-    .eq("lead_id", leadId)
-    .in("status", ["active", "paused"]);
 }
 
 /** Stop the sequence whose initial outreach started the given Gmail thread. */
@@ -219,7 +213,12 @@ async function processSequence(
         admin,
         seq,
         "Organization is already in conversation.",
-        `Follow-ups to ${email} stopped. ${reason}`,
+        `Follow-ups to everyone at this organization stopped. ${reason}`,
+      );
+      await stopFollowupsForOrganization(
+        admin,
+        lead.id,
+        "Organization is already in conversation.",
       );
       return "stopped";
     }
@@ -235,7 +234,8 @@ async function processSequence(
   }
 
   // Guard 4: live thread check. Never follow up on a thread that already
-  // has a human reply, even if the scan hasn't run yet.
+  // has a human reply, even if the scan missed it (e.g. a mail rule archived
+  // it out of the inbox). Out-of-office auto-replies don't count.
   if (!root.gmail_thread_id) {
     await stop(admin, seq, "No Gmail thread recorded for the original email.");
     return "stopped";
@@ -266,8 +266,9 @@ async function processSequence(
       admin,
       seq,
       "They replied.",
-      `A reply was found in the thread with ${email}; follow-ups stopped. Run "Scan email" to classify it.`,
+      `A reply was found in the thread with ${email}; follow-ups to everyone at this organization stopped. Open the thread to set the lead's status.`,
     );
+    await stopFollowupsForOrganization(admin, lead.id, "Someone at the organization replied.");
     return "stopped";
   }
   if (thread.hasBounce) {
@@ -384,6 +385,12 @@ export async function runDueFollowups(opts?: {
 }): Promise<RunSummary> {
   const admin = createAdminClient();
   const summary: RunSummary = { checked: 0, sent: 0, stopped: 0, errors: [] };
+
+  // Read new replies first: a reply from anyone at an organization marks the
+  // lead Interested / Not interested and stops follow-ups to everyone there,
+  // so those sequences drop out of the load below. If the scan fails, sending
+  // still proceeds: each send re-checks its own thread and the org's mailbox.
+  summary.replyScan = await scanInboxForReplies(admin);
 
   const sequences = await loadSequences(admin, {
     dueOnly: !opts?.sequenceIds,

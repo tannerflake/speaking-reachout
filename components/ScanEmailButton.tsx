@@ -10,6 +10,8 @@ function summarize(s: ScanSummary): string {
   const parts: string[] = [];
   if (s.replies) parts.push(`${s.replies} repl${s.replies === 1 ? "y" : "ies"}`);
   if (s.bounces) parts.push(`${s.bounces} bounce${s.bounces === 1 ? "" : "s"}`);
+  if (s.autoReplies)
+    parts.push(`${s.autoReplies} auto-repl${s.autoReplies === 1 ? "y" : "ies"} (ignored)`);
   const found = parts.length ? parts.join(", ") : "No responses";
   const updated = s.leadsUpdated
     ? ` — ${s.leadsUpdated} lead${s.leadsUpdated === 1 ? "" : "s"} updated`

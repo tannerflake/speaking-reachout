@@ -18,13 +18,19 @@ export function RunFollowupsButton({ dueCount }: { dueCount: number }) {
     setSummary(null);
     start(async () => {
       const res = await sendDueFollowups();
+      const scan = res.replyScan;
+      const scanNote = scan?.error
+        ? ` Reply scan failed: ${scan.error}`
+        : scan?.replies
+          ? ` ${scan.replies} new repl${scan.replies === 1 ? "y" : "ies"} found; those organizations won't get follow-ups.`
+          : "";
       if (res.error) setSummary(res.error);
-      else if (res.checked === 0) setSummary("No follow-ups due today.");
+      else if (res.checked === 0) setSummary(`No follow-ups due today.${scanNote}`);
       else {
         const parts = [`${res.sent} sent`];
         if (res.stopped) parts.push(`${res.stopped} stopped`);
         if (res.errors.length) parts.push(`${res.errors.length} failed`);
-        setSummary(parts.join(", ") + ".");
+        setSummary(parts.join(", ") + "." + scanNote);
       }
       router.refresh();
     });

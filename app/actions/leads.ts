@@ -6,7 +6,7 @@ import { getActiveRules, getActiveVoiceInjection, getLead } from "@/lib/data";
 import { generateOutreach } from "@/lib/claude/outreach";
 import { pickPrimaryContact, statusLabel } from "@/lib/utils";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { stopSequencesForLead } from "@/lib/followups/run";
+import { stopSequencesForLead } from "@/lib/followups/stop";
 import { FOLLOWUP_ELIGIBLE_STATUSES } from "@/lib/followups/cadence";
 import type { LeadStatus } from "@/lib/types";
 
