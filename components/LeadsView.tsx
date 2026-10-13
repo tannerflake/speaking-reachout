@@ -24,6 +24,7 @@ import type { WorkKind } from "@/components/Badge";
 import {
   bulkDraft,
   cancelSendQueue,
+  draftForAllContacts,
   drainSendQueue,
   queueSendForLeads,
   sendQueueStatus,
@@ -395,46 +396,123 @@ export function LeadsView({
     );
   }
 
-  /** Queue every unsent draft on the selected leads, spread over the chosen window. */
+  /**
+   * Get each selected lead to "has contacts and drafts", then queue every
+   * unsent draft, spread over the chosen window. Per lead: no emailable
+   * contact means find contacts + draft (paid lookups); emailable contacts
+   * without a draft means draft only; otherwise it is ready as-is. Leads
+   * that already have a sent email are never prepped (the engagement guard
+   * would block their sends anyway, so a lookup would be wasted spend).
+   */
   function runBulkSend() {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
     const label =
       SPREAD_OPTIONS.find((o) => o.value === spread)?.label ??
       `over ${spread} min`;
+    const chosen = filtered.filter((r) => selected.has(r.id));
+    const toFind = chosen
+      .filter((r) => !r.originatedVia && r.emailableContacts === 0)
+      .map((r) => r.id);
+    const toDraft = chosen
+      .filter(
+        (r) =>
+          !r.originatedVia &&
+          r.emailableContacts > 0 &&
+          r.draftedContacts < r.emailableContacts,
+      )
+      .map((r) => r.id);
+    const prepNotes = [
+      toFind.length
+        ? `find contacts and draft for ${toFind.length} (uses paid lookups)`
+        : "",
+      toDraft.length ? `draft for ${toDraft.length}` : "",
+    ].filter(Boolean);
     ask(
-      `Send every unsent draft on ${ids.length} lead${
+      `${prepNotes.length ? `First ${prepNotes.join(", then ")}. Then send` : "Send"} every unsent draft on ${ids.length} lead${
         ids.length === 1 ? "" : "s"
-      } from the connected Gmail, spread ${label}? Each email goes to its contact individually and starts its follow-up sequence. Leads without a draft are skipped.`,
+      } from the connected Gmail, spread ${label}? Each email goes to its contact individually and starts its follow-up sequence.`,
       () => {
         setMsg(null);
+        markWorking(toFind, "preparing");
+        markWorking(toDraft, "drafting");
         start(async () => {
+          // Prep phase: same two-at-a-time pacing as "Find Contacts + Draft".
+          const prepTotal = toFind.length + toDraft.length;
+          let prepDone = 0;
+          let drafts = 0;
+          let prepErrors = 0;
+          const todo = [
+            ...toFind.map((id) => ({ id, find: true })),
+            ...toDraft.map((id) => ({ id, find: false })),
+          ];
+          async function worker() {
+            for (;;) {
+              const job = todo.shift();
+              if (!job) return;
+              try {
+                if (job.find) {
+                  const res = await enrichLead(job.id);
+                  drafts += res.draftsCreated;
+                  if (res.error) prepErrors += 1;
+                } else {
+                  const res = await draftForAllContacts(job.id);
+                  drafts += res.created;
+                  if (res.error && res.created === 0) prepErrors += 1;
+                }
+              } catch {
+                prepErrors += 1;
+              } finally {
+                clearWorking([job.id]);
+              }
+              prepDone += 1;
+              setProgress(
+                `Preparing ${prepDone} of ${prepTotal} before sending: ${drafts} new draft${drafts === 1 ? "" : "s"} so far…`,
+              );
+            }
+          }
+          if (prepTotal > 0) {
+            try {
+              await Promise.all([worker(), worker()]);
+            } finally {
+              clearWorking([...toFind, ...toDraft]);
+              setProgress(null);
+            }
+          }
+          const prepSummary = prepTotal
+            ? `Prepared ${prepTotal} lead${prepTotal === 1 ? "" : "s"} (${drafts} new draft${drafts === 1 ? "" : "s"}${
+                prepErrors ? `, ${prepErrors} had a problem` : ""
+              }). `
+            : "";
+
           let res: Awaited<ReturnType<typeof queueSendForLeads>>;
           try {
             res = await queueSendForLeads(ids, spread);
           } catch (e) {
             setMsg(
-              `Could not queue: ${e instanceof Error ? e.message : "request failed"}`,
+              `${prepSummary}Could not queue: ${e instanceof Error ? e.message : "request failed"}`,
             );
+            router.refresh();
             return;
           }
           if (res.error) {
-            setMsg(`Could not queue: ${res.error}`);
+            setMsg(`${prepSummary}Could not queue: ${res.error}`);
           } else if (res.queued === 0) {
             setMsg(
-              res.blocked
-                ? `Nothing queued: ${res.blocked} draft${res.blocked === 1 ? " was" : "s were"} blocked because the organization is already in a conversation${
-                    res.skipped ? `, and ${res.skipped} lack a valid email` : ""
-                  }. Open the lead to see why.`
-                : `Nothing to send: no unsent drafts with a contact email on the selected leads${
-                    res.skipped
-                      ? ` (${res.skipped} draft${res.skipped === 1 ? "" : "s"} lack a valid email)`
-                      : ""
-                  }. Use "Find contacts + draft" first.`,
+              prepSummary +
+                (res.blocked
+                  ? `Nothing queued: ${res.blocked} draft${res.blocked === 1 ? " was" : "s were"} blocked because the organization is already in a conversation${
+                      res.skipped ? `, and ${res.skipped} lack a valid email` : ""
+                    }. Open the lead to see why.`
+                  : `Nothing to send: no unsent drafts with a contact email on the selected leads${
+                      res.skipped
+                        ? ` (${res.skipped} draft${res.skipped === 1 ? "" : "s"} lack a valid email)`
+                        : ""
+                    }.`),
             );
           } else {
             setMsg(
-              `Queued ${res.queued} email${res.queued === 1 ? "" : "s"}; the last one goes out around ${
+              `${prepSummary}Queued ${res.queued} email${res.queued === 1 ? "" : "s"}; the last one goes out around ${
                 res.finishesAt ? clock(res.finishesAt) : "soon"
               }${res.skipped ? `. ${res.skipped} skipped for missing email` : ""}${
                 res.blocked
@@ -655,7 +733,7 @@ export function LeadsView({
                 disabled={pending}
                 className="bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
               >
-                {`Send Drafts for ${selected.size}`}
+                {pending ? "Working…" : `Prepare + Send for ${selected.size}`}
               </button>
               <select
                 value={spread}
