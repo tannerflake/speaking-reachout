@@ -14,6 +14,7 @@ export type LeadStatus =
   | "closed"
   | "closed_not_me"
   | "not_interested"
+  | "cant_pay"
   | "junk";
 
 export const LEAD_STATUSES: LeadStatus[] = [
@@ -27,6 +28,7 @@ export const LEAD_STATUSES: LeadStatus[] = [
   "closed",
   "closed_not_me",
   "not_interested",
+  "cant_pay",
   "junk",
 ];
 

@@ -80,6 +80,7 @@ export const ENGAGED_STATUSES: LeadStatus[] = [
   "closed",
   "closed_not_me",
   "not_interested",
+  "cant_pay",
 ];
 
 /** How far back the mailbox is searched for an existing conversation. */

@@ -10,7 +10,7 @@ for Jeff Flake. It is a lightweight CRM plus an AI outreach engine:
 3. **Send** — review/edit the draft and send from Jeff's Gmail with one click
    (one-click _approve-and-send_; nothing is ever auto-sent).
 4. **Track** — move leads through a pipeline: `new → reached_out → interested →
-   booked → closed` (plus `not_interested`).
+   booked → closed` (plus `not_interested`, `cant_pay`, `junk`).
 5. **Tune** — a natural-language settings panel turns instructions like "Don't
    pull leads from the UK" or "No em-dashes" into structured rules the AI obeys
    on every future run.
@@ -212,6 +212,14 @@ Apply `supabase/migrations/0020_followups.sql` before using this.
   follows whoever started the conversation. Apply
   `supabase/migrations/0021_outreach_sent_via.sql` first; it also back-fills
   the imported fall 2026 campaign as `gmail`.
+- **Where the Claude bill goes** → every Claude call writes one row to
+  `api_usage` (feature, model, input/output/cache tokens, web-search count,
+  duration, ok/error) so spend can be attributed to discovery vs drafting vs
+  contact finding. Logging is best-effort and never fails the call. Apply
+  `supabase/migrations/0025_api_usage.sql` first; until then each call logs a
+  warning and continues. Models (`lib/claude/client.ts`): Opus 5.5 for
+  discovery and outreach drafting, Sonnet 5 for everything else, Haiku 5.5
+  for reply classification.
 - **No repeated paid lookups** → `contacts.email_lookup_attempted_at` records
   when Hunter was asked about a person. The enrich pass sets it for every
   contact it tried, and "Find email via hunter" refuses to repeat a lookup
@@ -232,7 +240,7 @@ organization is already in a conversation, wherever that conversation lives:
    contain one another are treated as one organization. "Trinity University"
    and "Trinity University Distinguished Lecture Series" are the same school.
 2. **CRM signals across the whole org:** a lead that is Interested, Booked,
-   Closed, Closed (Not Me), or Not interested; any recorded reply; any
+   Closed, Closed (Not Me), Not interested, or Can't pay; any recorded reply; any
    outreach that was sent by hand from Gmail and imported.
 3. **Live mailbox check:** any human reply from the domain in the last year
    (bounces and out-of-office auto-replies don't count), or any email to the

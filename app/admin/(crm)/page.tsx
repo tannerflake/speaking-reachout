@@ -55,6 +55,7 @@ export default async function DashboardPage() {
         </div>
         <p className="mt-2 text-xs text-zinc-400">
           {counts.not_interested} marked not interested
+          {counts.cant_pay > 0 ? `, ${counts.cant_pay} can't pay` : ""}
           {counts.closed_not_me > 0
             ? `, ${counts.closed_not_me} closed (not me)`
             : ""}

@@ -256,10 +256,14 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
         if (ambiguous) continue;
 
         const target: LeadStatus =
-          classification === "interested" ? "interested" : "not_interested";
+          classification === "interested"
+            ? "interested"
+            : classification === "cant_pay"
+              ? "cant_pay"
+              : "not_interested";
         // One interested person keeps the lead Interested even if a colleague
         // later declines; the decline is still in the activity log.
-        const keepInterested = l.status === "interested" && target === "not_interested";
+        const keepInterested = l.status === "interested" && target !== "interested";
         if (target !== l.status && !PROTECTED.includes(l.status) && !keepInterested) {
           await admin.from("leads").update({ status: target }).eq("id", l.id);
           await admin.from("interactions").insert({
