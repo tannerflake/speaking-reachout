@@ -21,9 +21,9 @@ const ONE_PAGER_PATH = path.join(
   process.cwd(),
   "assets",
   "outreach",
-  "jeff-flake-speaking-one-pager.pdf",
+  "ambassador-jeff-flake-speaking-guide.pdf",
 );
-const ONE_PAGER_DISPLAY_NAME = "Jeff Flake Speaking Engagements.pdf";
+const ONE_PAGER_DISPLAY_NAME = "Ambassador Jeff Flake Speaking Guide.pdf";
 
 let cached: Promise<EmailAttachment> | null = null;
 
