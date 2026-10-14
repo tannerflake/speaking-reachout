@@ -14,6 +14,12 @@ function supabaseImageHost(): string | undefined {
 const sbHost = supabaseImageHost();
 
 const nextConfig: NextConfig = {
+  // The outreach one-pager is read from disk at send time (lib/gmail/
+  // attachments.ts). Make sure it ships in the serverless bundles for every
+  // route that can send initial outreach, not just the Node runtime's cwd.
+  outputFileTracingIncludes: {
+    "/**": ["./assets/outreach/**"],
+  },
   // The Discover + outreach routes make long-running Claude (web search) calls.
   // Keep server actions generous so large lead batches don't get cut off.
   experimental: {

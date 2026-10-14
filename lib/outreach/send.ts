@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { GmailNotConnectedError, sendGmail } from "@/lib/gmail/send";
+import { getOutreachOnePager } from "@/lib/gmail/attachments";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { startSequence } from "@/lib/followups/run";
 import {
@@ -109,10 +110,15 @@ export async function sendOutreachRow(
   }
 
   try {
+    // Every initial outreach carries the one-page speaking overview; the
+    // email copy refers to it, so sending without it would be a broken
+    // promise. Follow-ups (lib/followups/run.ts) deliberately do not.
+    const onePager = await getOutreachOnePager();
     const result = await sendGmail({
       to: email as string,
       subject: row.subject,
       body: row.body,
+      attachments: [onePager],
     });
 
     const sentAt = new Date().toISOString();
