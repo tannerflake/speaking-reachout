@@ -77,6 +77,7 @@ Research the org/event with web search, then return the JSON { subject, body }.`
     userPrompt,
     maxTokens: 8000,
     maxSearches: 6,
+    feature: "outreach",
   });
 
   let parsed: { subject?: unknown; body?: unknown };

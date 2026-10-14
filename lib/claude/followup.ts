@@ -74,7 +74,12 @@ ${original.body}${prior}
 
 Return the JSON { body }.`;
 
-  const text = await generateText({ system, userPrompt, maxTokens: 1200 });
+  const text = await generateText({
+    system,
+    userPrompt,
+    maxTokens: 1200,
+    feature: "followup",
+  });
 
   let body: string;
   try {

@@ -51,6 +51,7 @@ export async function parseRuleInstruction(raw: string): Promise<ParsedRule> {
     system: RULE_PARSE_SYSTEM,
     userPrompt: raw,
     maxTokens: 1024,
+    feature: "rule",
   });
 
   let parsed: ParsedRule;

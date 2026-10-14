@@ -116,6 +116,7 @@ async function fromClaude(prompt: string): Promise<string> {
     maxSearches: 8,
     timeoutMs: PROVIDER_TIMEOUT_MS,
     cheap: true,
+    feature: "contacts",
   });
 }
 

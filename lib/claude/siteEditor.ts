@@ -135,6 +135,7 @@ export async function proposeSiteEdit(opts: {
     system: buildSystemPrompt(),
     userPrompt,
     maxTokens: 4096,
+    feature: "site",
   });
 
   let parsed: RawProposal;

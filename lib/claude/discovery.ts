@@ -132,6 +132,7 @@ export async function discoverLeads(params: {
         userPrompt,
         maxTokens: 16000,
         maxSearches: Math.min(20, Math.max(6, unitSize * 2)),
+        feature: "discovery",
       });
       candidates = normalizeCandidates(extractJson<unknown>(text));
     } catch {

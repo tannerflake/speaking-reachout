@@ -84,6 +84,7 @@ async function runPass(
     system,
     userPrompt,
     maxTokens: 8000,
+    feature: "voice",
   });
   try {
     const parsed = extractJson<Record<string, unknown>>(text);
@@ -227,6 +228,7 @@ Return ONLY JSON: {"prompt_injection": string, "suggested_rules": [{"rule_type":
     // Adaptive thinking spends from the same max_tokens budget as the visible
     // output; too small a cap truncates the JSON mid-string.
     maxTokens: 8000,
+    feature: "voice",
   });
 
   let prompt_injection = "";
