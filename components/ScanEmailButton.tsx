@@ -2,7 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { scanForReplies, type ScanSummary } from "@/app/actions/emailScan";
+import { scanForReplies } from "@/app/actions/emailScan";
+import type { ScanSummary } from "@/lib/gmail/replyScan";
 
 function summarize(s: ScanSummary): string {
   if (s.error) return s.error;
