@@ -1,5 +1,7 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ReplyThreads } from "@/components/ReplyThreads";
 import { getLead, getLeadFollowups, getLeadInteractions } from "@/lib/data";
 import {
   ContactStatusBadge,
@@ -134,6 +136,18 @@ export default async function LeadDetailPage({
           )}
         </div>
       </div>
+
+      {/* Replies, read live from Gmail; streams in so the rest of the page
+          doesn't wait on the mailbox. */}
+      {lead.outreach.some((o) => o.status === "sent") && (
+        <Suspense
+          fallback={
+            <p className="text-sm text-zinc-400">Checking Gmail for replies…</p>
+          }
+        >
+          <ReplyThreads lead={lead} interactions={interactions} />
+        </Suspense>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         {/* Main column */}

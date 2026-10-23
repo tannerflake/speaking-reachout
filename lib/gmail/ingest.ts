@@ -191,7 +191,7 @@ function findPart(
   return null;
 }
 
-function extractBody(
+export function extractBody(
   payload: gmail_v1.Schema$MessagePart | undefined,
 ): string {
   if (!payload) return "";
@@ -228,7 +228,7 @@ function stripHtml(html: string): string {
  * Strip quoted reply chains and signatures so analysis sees the actual
  * writing, not the whole forwarded history. Best-effort heuristics.
  */
-function cleanBody(raw: string): string {
+export function cleanBody(raw: string): string {
   let text = raw.replace(/\r\n/g, "\n");
 
   const cutMarkers: RegExp[] = [

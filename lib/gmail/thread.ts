@@ -33,7 +33,7 @@ function looksLikeBounce(from: string): boolean {
  * RFC 3834 Auto-Submitted plus the common vendor headers autoresponders set,
  * with the subject/sender heuristics as a fallback.
  */
-function looksLikeAutoReply(header: (name: string) => string): boolean {
+export function looksLikeAutoReply(header: (name: string) => string): boolean {
   const autoSubmitted = header("Auto-Submitted").trim().toLowerCase();
   if (autoSubmitted && autoSubmitted !== "no") return true;
   if (header("X-Autoreply") || header("X-Autorespond")) return true;

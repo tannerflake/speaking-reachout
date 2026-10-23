@@ -67,6 +67,81 @@ const ORIGIN_FILTER_KEY = "leads:originFilter";
 // Last-activity date range, stored as "YYYY-MM-DD" strings (empty = open end).
 const DATE_FROM_KEY = "leads:dateFrom";
 const DATE_TO_KEY = "leads:dateTo";
+// Column sort, stored as { key, dir }.
+const SORT_KEY = "leads:sort";
+
+type SortKey =
+  | "name"
+  | "type"
+  | "country"
+  | "status"
+  | "sentBy"
+  | "contacts"
+  | "drafts"
+  | "lastActivity";
+type SortDir = "asc" | "desc";
+interface Sort {
+  key: SortKey;
+  dir: SortDir;
+}
+
+const DEFAULT_SORT: Sort = { key: "lastActivity", dir: "desc" };
+
+// First click on a text column sorts A to Z; on a number or date column it
+// puts the biggest / most recent first.
+const SORT_COLUMNS: { key: SortKey; label: string; firstDir: SortDir }[] = [
+  { key: "name", label: "Name", firstDir: "asc" },
+  { key: "type", label: "Type", firstDir: "asc" },
+  { key: "country", label: "Country", firstDir: "asc" },
+  { key: "status", label: "Status", firstDir: "asc" },
+  { key: "sentBy", label: "Sent by", firstDir: "asc" },
+  { key: "contacts", label: "Contacts", firstDir: "desc" },
+  { key: "drafts", label: "Drafts", firstDir: "desc" },
+  { key: "lastActivity", label: "Last activity", firstDir: "desc" },
+];
+
+/** Compare two rows on one column, ascending. Status follows pipeline order. */
+function compareRows(a: LeadListRow, b: LeadListRow, key: SortKey): number {
+  switch (key) {
+    case "name":
+      return a.name.localeCompare(b.name);
+    case "type":
+      return (a.type ?? "").localeCompare(b.type ?? "");
+    case "country":
+      return (a.location_country ?? "").localeCompare(b.location_country ?? "");
+    case "status":
+      return LEAD_STATUSES.indexOf(a.status) - LEAD_STATUSES.indexOf(b.status);
+    case "sentBy":
+      return (a.originatedVia ?? "").localeCompare(b.originatedVia ?? "");
+    case "contacts":
+      return a.contactsCount - b.contactsCount;
+    case "drafts":
+      return (
+        a.draftedContacts - b.draftedContacts ||
+        a.emailableContacts - b.emailableContacts
+      );
+    case "lastActivity":
+      return (
+        new Date(a.lastActivity).getTime() - new Date(b.lastActivity).getTime()
+      );
+  }
+}
+
+function loadSort(): Sort | null {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(SORT_KEY) ?? "");
+    const s = parsed as Partial<Sort>;
+    if (
+      SORT_COLUMNS.some((c) => c.key === s.key) &&
+      (s.dir === "asc" || s.dir === "desc")
+    ) {
+      return { key: s.key as SortKey, dir: s.dir };
+    }
+  } catch {
+    // nothing saved yet
+  }
+  return null;
+}
 
 /** Local calendar date as "YYYY-MM-DD" (what <input type="date"> uses). */
 function toDateInput(d: Date): string {
@@ -132,6 +207,7 @@ export function LeadsView({
   const [search, setSearch] = useState<string>("");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
+  const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -219,7 +295,21 @@ export function LeadsView({
     if (savedFrom) setDateFrom(savedFrom);
     const savedTo = localStorage.getItem(DATE_TO_KEY);
     if (savedTo) setDateTo(savedTo);
+    const savedSort = loadSort();
+    if (savedSort) setSort(savedSort);
   }, [initialStatus]);
+
+  /** Header click: same column flips direction, a new column starts fresh. */
+  function changeSort(key: SortKey) {
+    const col = SORT_COLUMNS.find((c) => c.key === key);
+    const next: Sort =
+      sort.key === key
+        ? { key, dir: sort.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: col?.firstDir ?? "asc" };
+    setSort(next);
+    lastClickRef.current = null;
+    localStorage.setItem(SORT_KEY, JSON.stringify(next));
+  }
 
   function changeStatus(value: string[]) {
     setStatus(value);
@@ -249,7 +339,7 @@ export function LeadsView({
     // "from" day and the end of the "to" day so both ends are inclusive.
     const fromMs = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null;
     const toMs = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : null;
-    return rows.filter((r) => {
+    const matching = rows.filter((r) => {
       if (fromMs !== null || toMs !== null) {
         const t = new Date(r.lastActivity).getTime();
         if (Number.isNaN(t)) return false;
@@ -279,7 +369,14 @@ export function LeadsView({
       if (q && !r.name.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [rows, status, source, origin, search, dateFrom, dateTo]);
+    // Ties fall back to most recent activity so the order is stable.
+    const sign = sort.dir === "asc" ? 1 : -1;
+    return matching.sort(
+      (a, b) =>
+        sign * compareRows(a, b, sort.key) ||
+        compareRows(b, a, "lastActivity"),
+    );
+  }, [rows, status, source, origin, search, dateFrom, dateTo, sort]);
 
   /**
    * Checkbox click. Plain click toggles one row; shift-click selects (or
@@ -815,14 +912,37 @@ export function LeadsView({
                   aria-label="Select all"
                 />
               </th>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Country</th>
-              <th>Status</th>
-              <th>Sent by</th>
-              <th>Contacts</th>
-              <th>Drafts</th>
-              <th>Last activity</th>
+              {SORT_COLUMNS.map((c) => {
+                const active = sort.key === c.key;
+                return (
+                  <th
+                    key={c.key}
+                    aria-sort={
+                      active
+                        ? sort.dir === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                    }
+                  >
+                    <button
+                      type="button"
+                      onClick={() => changeSort(c.key)}
+                      className={`inline-flex items-center gap-1 hover:text-zinc-900 ${
+                        active ? "text-zinc-900" : ""
+                      }`}
+                    >
+                      {c.label}
+                      <span
+                        className={active ? "text-zinc-700" : "text-zinc-300"}
+                        aria-hidden
+                      >
+                        {active ? (sort.dir === "asc" ? "▲" : "▼") : "↕"}
+                      </span>
+                    </button>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
