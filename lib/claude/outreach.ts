@@ -2,6 +2,11 @@ import { SPEAKER_PROFILE, generateWithWebSearch } from "@/lib/claude/client";
 import { extractJson } from "@/lib/claude/json";
 import { copyStyleInstructions, enforceStyle } from "@/lib/claude/style";
 import type { Contact, Lead, TailoringRule } from "@/lib/types";
+import { greetingFor } from "@/lib/outreach/orgName";
+
+/** A first line that is only a greeting: "Dear there,", "Hi team,", "Hello,". */
+export const GREETING_LINE =
+  /^\s*(dear|hi|hello|greetings|good (morning|afternoon))\b[^\n]*\n/i;
 
 const OUTREACH_SYSTEM_BASE = `You write a single, specifically-researched outreach email pitching the speaker below for a paid speaking engagement at a given institution or event. You are writing on behalf of the speaker's representative (their family/team handles booking), so write in the first person plural where natural ("we'd love to", "Jeff would be glad to").
 
@@ -45,10 +50,15 @@ export async function generateOutreach(params: {
   const system =
     OUTREACH_SYSTEM_BASE + voiceBlock + copyStyleInstructions(rules);
 
+  // A shared inbox (meetings@, events@) has no person to greet: greet the
+  // organization instead, never "Dear there,".
+  const orgGreeting = greetingFor(null, lead.name);
   const contactLine = contact
     ? `Contact: ${contact.name ?? "(name unknown)"}${
         contact.role ? `, ${contact.role}` : ""
-      }${contact.email ? ` <${contact.email}>` : " (email not yet resolved)"}.`
+      }${contact.email ? ` <${contact.email}>` : " (email not yet resolved)"}.${
+        contact.name?.trim() ? "" : ` This is a shared inbox, not a person: open with exactly "${orgGreeting}"`
+      }`
     : "Contact: none resolved yet — address it to the relevant team/role generically.";
 
   const topics = lead.suggested_topics?.length
@@ -92,8 +102,11 @@ Research the org/event with web search, then return the JSON { subject, body }.`
     typeof parsed.subject === "string" && parsed.subject.trim()
       ? parsed.subject.trim()
       : `Speaking opportunity with Jeff Flake — ${lead.name}`;
-  const rawBody =
+  let rawBody =
     typeof parsed.body === "string" ? parsed.body.trim() : text.trim();
+  if (contact && !contact.name?.trim() && GREETING_LINE.test(rawBody)) {
+    rawBody = rawBody.replace(GREETING_LINE, `${orgGreeting}\n`);
+  }
 
   // Hard style enforcement (Section 6/7): strip/rewrite violations.
   const subj = enforceStyle(rawSubject, rules);

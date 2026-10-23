@@ -8,7 +8,8 @@ import {
   findContactsMultiSource,
 } from "@/lib/contacts/multiSource";
 import { personKey } from "@/lib/contacts/personKey";
-import { looksLikeRealEmail } from "@/lib/utils";
+import { domainResolves, findRealWebsite } from "@/lib/contacts/website";
+import { domainFromUrl, looksLikeRealEmail } from "@/lib/utils";
 import type { Contact } from "@/lib/types";
 
 type ContactWithLead = Contact & {
@@ -51,9 +52,21 @@ export async function resolveContactEmail(
     };
   }
 
+  // An earlier "found nothing" against a dead domain says nothing about the
+  // real one, so a repaired website re-opens the lookup.
+  const repaired = contact.lead
+    ? await ensureLiveWebsite(supabase, {
+        id: contact.lead_id,
+        name: contact.lead.name,
+        website: contact.lead.website,
+        location: null,
+      })
+    : null;
+  if (repaired && contact.lead) contact.lead.website = repaired;
+
   // Never silently repeat a lookup the enrich pass (or an earlier click)
   // already made. The operator can still force a re-check.
-  if (contact.email_lookup_attempted_at && !opts.force) {
+  if (contact.email_lookup_attempted_at && !opts.force && !repaired) {
     return {
       provider: resolver.name,
       alreadyAttemptedAt: contact.email_lookup_attempted_at,
@@ -134,6 +147,16 @@ export async function relookupContact(
       error:
         "No email-finding provider is configured. Set CONTACT_RESOLVER=hunter (or apollo) with an API key to look up a fresh contact.",
     };
+  }
+
+  if (contact.lead) {
+    const repaired = await ensureLiveWebsite(supabase, {
+      id: contact.lead_id,
+      name: contact.lead.name,
+      website: contact.lead.website,
+      location: null,
+    });
+    if (repaired) contact.lead.website = repaired;
   }
 
   const result = await resolver.resolve({
@@ -339,6 +362,17 @@ export async function findMultipleContacts(leadId: string): Promise<MultiFindRes
   };
   const existing = lead.contacts ?? [];
 
+  // A dead website domain makes every Hunter lookup come back empty. Fix it
+  // first, and re-open the lookups that were wasted on the dead domain.
+  const repaired = await ensureLiveWebsite(supabase, {
+    ...lead,
+    location: [lead.location_region, lead.location_country].filter(Boolean).join(", ") || null,
+  });
+  if (repaired) {
+    lead.website = repaired;
+    for (const c of existing) c.email_lookup_attempted_at = null;
+  }
+
   // Contacts already on the lead with a name but no email (typically the one
   // discovery itself surfaced): resolve them through the paid provider now so
   // the operator never has to click "Find email" by hand.
@@ -444,6 +478,51 @@ export async function findMultipleContacts(leadId: string): Promise<MultiFindRes
     failed: result.failed,
     hunterUsed: hunterUsedForExisting,
   };
+}
+
+/**
+ * If the lead's website domain does not exist, web-search the real one, save
+ * it, and clear lookup marks on the lead's contacts (those "found nothing"
+ * results were against the dead domain). Returns the new website when it was
+ * repaired, else null. A transient DNS error is never treated as dead.
+ */
+async function ensureLiveWebsite(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  lead: { id: string; name: string; website: string | null; location: string | null },
+): Promise<string | null> {
+  const deadDomain = domainFromUrl(lead.website);
+  if (!deadDomain || (await domainResolves(deadDomain)) !== false) return null;
+
+  const website = await findRealWebsite({
+    name: lead.name,
+    location: lead.location,
+    deadDomain,
+  });
+  if (!website) {
+    await supabase.from("interactions").insert({
+      lead_id: lead.id,
+      kind: "note",
+      detail: `Website ${deadDomain} does not exist and the real site could not be found. Fix the website by hand so email lookups can work.`,
+    });
+    return null;
+  }
+
+  const { error } = await supabase
+    .from("leads")
+    .update({ website })
+    .eq("id", lead.id);
+  if (error) return null;
+  await supabase
+    .from("contacts")
+    .update({ email_lookup_attempted_at: null })
+    .eq("lead_id", lead.id)
+    .is("email", null);
+  await supabase.from("interactions").insert({
+    lead_id: lead.id,
+    kind: "note",
+    detail: `Website ${deadDomain} does not exist; replaced it with ${website}.`,
+  });
+  return website;
 }
 
 /**

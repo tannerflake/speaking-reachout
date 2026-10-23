@@ -1,6 +1,7 @@
 import { SPEAKER_PROFILE, generateText } from "@/lib/claude/client";
 import { extractJson } from "@/lib/claude/json";
 import { copyStyleInstructions, enforceStyle } from "@/lib/claude/style";
+import { greetingFor } from "@/lib/outreach/orgName";
 import type { Contact, Lead, TailoringRule } from "@/lib/types";
 
 /**
@@ -66,7 +67,9 @@ ${brief}
 
 Organization: ${lead.name} (${lead.type})
 Recipient: ${contact?.name ?? "(name unknown)"}${contact?.role ? `, ${contact.role}` : ""}${
-    greetingName ? ` — greet them as "${greetingName}"` : " — use a greeting without a name"
+    greetingName
+      ? ` — greet them as "${greetingName}"`
+      : ` — a shared inbox, not a person: greet them as "${greetingFor(null, lead.name)}"`
   }
 Original email sent ${original.sentAt ? new Date(original.sentAt).toDateString() : "recently"}:
 Subject: ${original.subject}

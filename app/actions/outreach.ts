@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveRules, getActiveVoiceInjection, getLead } from "@/lib/data";
-import { generateOutreach } from "@/lib/claude/outreach";
+import { GREETING_LINE, generateOutreach } from "@/lib/claude/outreach";
+import { greetingFor, organizationDisplayName } from "@/lib/outreach/orgName";
 import {
   getQueueStatus,
   queueOutreachForLeads,
@@ -307,13 +308,20 @@ export async function bulkDraft(
 
 const NAME_TOKEN = "[NAME]";
 
-/** Swap the shared greeting placeholder for one contact's name. */
-function personalize(body: string, contact: Contact): string {
+/**
+ * Swap the shared greeting placeholder for one contact: "Dear Susan Krys,",
+ * or for a shared inbox with no name, "Dear <organization> team,".
+ */
+function personalize(body: string, contact: Contact, leadName: string): string {
   const name = contact.name?.trim();
-  if (body.includes(NAME_TOKEN)) {
-    return body.split(NAME_TOKEN).join(name || "there");
-  }
-  return body;
+  if (!body.includes(NAME_TOKEN)) return body;
+  const greeted = body.replace(
+    new RegExp(`^\\s*Dear ${NAME_TOKEN.replace(/[[\]]/g, "\\$&")},[^\\n]*`),
+    greetingFor(name, leadName),
+  );
+  return greeted
+    .split(NAME_TOKEN)
+    .join(name || organizationDisplayName(leadName) || "your team");
 }
 
 /**
@@ -367,10 +375,7 @@ export async function draftForAllContacts(
     // Guarantee the placeholder greeting even if the model ignored it.
     const body = gen.body.includes(NAME_TOKEN)
       ? gen.body
-      : gen.body.replace(
-          /^\s*(dear|hi|hello|greetings|good (morning|afternoon))\b[^\n]*\n/i,
-          `Dear ${NAME_TOKEN},\n`,
-        );
+      : gen.body.replace(GREETING_LINE, `Dear ${NAME_TOKEN},\n`);
 
     const supabase = await createClient();
     const { error } = await supabase.from("outreach").insert(
@@ -378,7 +383,7 @@ export async function draftForAllContacts(
         lead_id: leadId,
         contact_id: c.id,
         subject: gen.subject,
-        body: personalize(body, c),
+        body: personalize(body, c, lead.name),
         status: "draft",
       })),
     );

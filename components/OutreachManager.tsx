@@ -351,7 +351,11 @@ export function OutreachManager({
             </p>
           )}
           <p className="mt-2 text-xs text-rose-700">
-            Checked: {guard.result.domains.map((d) => `@${d}`).join(", ") || "name only"}
+            Checked:{" "}
+            {[
+              ...guard.result.domains.map((d) => `@${d}`),
+              ...(guard.result.names ?? []).map((n) => `"${n}"`),
+            ].join(", ") || "name only"}
             {guard.result.gmailChecked ? " and the Gmail mailbox." : "."}{" "}
             New drafts are off and nothing here can be sent without a recorded
             reason.

@@ -23,7 +23,7 @@ const MAX_UNITS = 8;
 // returning the same obvious venues. Grounded in the speaker's public profile.
 const DIVERSIFY_ANGLES = [
   "universities and colleges — civic-engagement, political-science, public-policy, and leadership programs",
-  "think tanks, policy institutes, and world-affairs councils",
+  "presidential libraries, civic history museums, and community lecture series (library and town-hall series)",
   "corporate and trade-association keynotes (free markets, trade, fiscal policy)",
   "leadership, ethics, and civility-themed conferences and summits",
   "foreign-policy and diplomacy venues (NATO, U.S.–Turkey relations, statecraft)",
@@ -38,7 +38,8 @@ ${SPEAKER_PROFILE}
 
 You are doing top-of-funnel lead generation. For each candidate return a structured record. Requirements:
 - Only return REAL, verifiable organizations/events found via web search. Every candidate MUST include a "source_url" that proves it exists (its official site, a program/events page, a conference site). Discard anything you cannot source.
-- Cover both framings: events (conferences, summits, festivals, lecture series) AND institutions (universities, think tanks, world-affairs councils, corporations, associations).
+- If the operator gives a focus, it decides what kinds of venues to return: return only venues that match it, and ignore the venue lists in the speaker profile. Without a focus, cover both framings: events (conferences, summits, festivals, lecture series) AND institutions (universities, corporations, associations).
+- NEVER return think tanks or policy institutes (organizations whose main work is policy research and advocacy, e.g. R Street, Niskanen, Brookings, Heritage, AEI). They do not pay speakers. This holds even if the operator focus seems to invite them.
 - For each, write a specific "fit_rationale": why THIS venue/audience is a strong match for this speaker.
 - Provide 2-4 "suggested_topics" tailored to that audience.
 - Best-effort contact: if the org's official site lists a relevant contact (events director, program chair, communications/booking contact) with a PUBLIC email, include it. NEVER invent or pattern-guess an email (no "firstname.lastname@" guessing). If you cannot find a real public email, set email to null and contact_status to "needs_lookup". Use "verified" only when the email comes from an official source page; "unverified" if reasonably inferred from a public source but not certain.
@@ -122,7 +123,9 @@ export async function discoverLeads(params: {
 
     const angleHint = diversificationHint(index, params.focus);
     const userPrompt = `Find ${unitSize} new speaking-engagement leads.${
-      params.focus ? `\n\nOperator focus for this run: "${params.focus}".` : ""
+      params.focus
+        ? `\n\nOperator focus for this run: "${params.focus}". Return only venues that match this focus.`
+        : ""
     }${rulesBlock}${exclusionHint}${angleHint}\n\nReturn exactly up to ${unitSize} candidates as the JSON array described in your instructions.`;
 
     let candidates: DiscoveredLead[];
@@ -142,7 +145,9 @@ export async function discoverLeads(params: {
 
     rawCount += candidates.length;
 
-    const filtered = filterDiscoveredLeads(candidates, params.rules);
+    const filtered = filterDiscoveredLeads(candidates, params.rules).filter(
+      (c) => !isThinkTank(c),
+    );
     for (const c of filtered) {
       // --- synchronous critical section: dedup + reserve a slot ---
       if (reserved >= target) break;
@@ -206,6 +211,12 @@ function diversificationHint(index: number, focus?: string): string {
   }
   const angle = DIVERSIFY_ANGLES[index % DIVERSIFY_ANGLES.length];
   return `\n\nTo diversify this run, lean toward: ${angle}. (Still respect any rules above.)`;
+}
+
+/** Think tanks don't pay speakers, so they're dropped even if the model returns one. */
+function isThinkTank(c: DiscoveredLead): boolean {
+  const hay = `${c.name} ${c.description}`.toLowerCase();
+  return /think[\s-]?tank/.test(hay);
 }
 
 function normalizeCandidates(parsed: unknown): DiscoveredLead[] {

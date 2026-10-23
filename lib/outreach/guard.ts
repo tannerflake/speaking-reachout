@@ -8,6 +8,7 @@ import {
   statusLabel,
 } from "@/lib/utils";
 import type { LeadStatus } from "@/lib/types";
+import { organizationSearchPhrases } from "@/lib/outreach/orgName";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = SupabaseClient<any, any, any>;
@@ -28,6 +29,10 @@ type Db = SupabaseClient<any, any, any>;
  *      human conversation, a recorded reply, or outreach sent by hand.
  *   3. Live mailbox check: any inbound mail from the domain, or any outbound
  *      mail to it that this app did not send, within the last year.
+ *   4. Live mailbox check by NAME: any mail from someone else that names the
+ *      organization ("American Council of Engineering Companies"). A booking
+ *      made through a speakers bureau lives only in threads with the bureau,
+ *      so the org's own domain never appears.
  *
  * The guard FAILS CLOSED: if the mailbox can't be checked, nothing is sent.
  * Callers may skip the mailbox step only for advisory checks (drafting, queue
@@ -46,7 +51,8 @@ export type ConflictKind =
   | "crm_reply"
   | "crm_manual_outreach"
   | "gmail_inbound"
-  | "gmail_outbound";
+  | "gmail_outbound"
+  | "gmail_mention";
 
 export interface EngagementConflict {
   kind: ConflictKind;
@@ -69,6 +75,8 @@ export interface EngagementGuardResult {
   siblings: OrgSibling[];
   /** Domains the organization was identified by. */
   domains: string[];
+  /** Organization names the mailbox was searched for. */
+  names: string[];
   /** False when the caller skipped the live mailbox check. */
   gmailChecked: boolean;
 }
@@ -254,19 +262,26 @@ export async function checkEngagementGuard(
   }
 
   // --- 3. Live mailbox -----------------------------------------------------
+  const names = [
+    ...new Set(members.flatMap((m) => organizationSearchPhrases(m.name))),
+  ];
   let gmailChecked = false;
-  if (!opts.skipGmail && domains.size > 0) {
+  if (!opts.skipGmail && (domains.size > 0 || names.length > 0)) {
     // Every thread this app ever started, CRM-wide, so an app send to the
     // same domain from any lead is recognized as ours rather than as a
     // hand-written thread.
     const { data: appRows, error: appErr } = await db
       .from("outreach")
-      .select("gmail_thread_id, subject, contact:contacts(email)")
+      .select("lead_id, gmail_thread_id, subject, contact:contacts(email)")
       .eq("sent_via", "app")
       .eq("status", "sent");
     if (appErr) throw new Error(appErr.message);
     const appSends: AppSends = { threads: new Set(), recipients: new Set() };
+    // Subjects of what this app sent to this org: a forward or reply of our
+    // own pitch names the org too, and isn't a sign of another conversation.
+    const orgSubjects = new Set<string>();
     for (const r of (appRows ?? []) as unknown as Array<{
+      lead_id: string;
       gmail_thread_id: string | null;
       subject: string;
       contact: { email: string | null } | { email: string | null }[] | null;
@@ -274,10 +289,16 @@ export async function checkEngagementGuard(
       if (r.gmail_thread_id) appSends.threads.add(r.gmail_thread_id);
       const email = one(r.contact)?.email?.toLowerCase();
       if (email) appSends.recipients.add(recipientKey(email, r.subject));
+      if (memberIds.includes(r.lead_id)) orgSubjects.add(baseSubject(r.subject));
     }
     for (const domain of domains) {
       const found = await gmailConflictsForDomain(domain, appSends);
       conflicts.push(...found);
+    }
+    if (names.length > 0) {
+      conflicts.push(
+        ...(await gmailConflictsForNames(names, domains, appSends, orgSubjects)),
+      );
     }
     gmailChecked = true;
   }
@@ -291,6 +312,7 @@ export async function checkEngagementGuard(
     conflicts,
     siblings,
     domains: [...domains],
+    names,
     gmailChecked,
   };
 }
@@ -344,6 +366,14 @@ interface AppSends {
 
 function recipientKey(email: string, subject: string): string {
   return `${email.trim().toLowerCase()}|${subject.trim().toLowerCase()}`;
+}
+
+/** "Re: Fwd: April Conference" -> "april conference". */
+function baseSubject(subject: string): string {
+  return subject
+    .replace(/^\s*((re|fwd?|fw)\s*:\s*)+/i, "")
+    .trim()
+    .toLowerCase();
 }
 
 /** Every address in a To/Cc header: "A <a@x.edu>, b@x.edu" -> ["a@x.edu", "b@x.edu"]. */
@@ -455,6 +485,87 @@ async function gmailConflictsForDomain(
       e instanceof Error
         ? `Could not check the mailbox for @${domain}: ${e.message}`
         : `Could not check the mailbox for @${domain}.`,
+    );
+  }
+
+  gmailCache.set(cacheKey, { at: Date.now(), conflicts });
+  return conflicts;
+}
+
+const SPEAKING_TERMS =
+  "speak speaking speaker speakers speech keynote remarks lecture engagement honorarium booking booked offer contract";
+
+/**
+ * Search the mailbox for mail that names the organization, sent by anyone
+ * other than this mailbox: a speakers bureau's offer, an event planner on a
+ * personal address, a colleague's forward. The org's own domain is covered by
+ * gmailConflictsForDomain; app threads, auto-replies and forwards of our own
+ * pitch are skipped. One list call, metadata fetched only for candidates.
+ */
+async function gmailConflictsForNames(
+  names: string[],
+  domains: Set<string>,
+  appSends: AppSends,
+  orgSubjects: Set<string>,
+): Promise<EngagementConflict[]> {
+  const cacheKey = `names|${names.join("|")}|${appSends.threads.size}|${orgSubjects.size}`;
+  const cached = gmailCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < GMAIL_CACHE_TTL_MS) return cached.conflicts;
+
+  let gmail: Awaited<ReturnType<typeof getGmailClient>>["gmail"];
+  try {
+    ({ gmail } = await getGmailClient());
+  } catch (e) {
+    throw new EngagementGuardUnavailableError(
+      e instanceof Error ? e.message : "Gmail is not available.",
+    );
+  }
+
+  const quoted = names.map((n) => `"${n.replace(/"/g, "")}"`).join(" ");
+  // Only mail about a speaking engagement counts: a newsletter that happens
+  // to mention "UCLA" is not a conversation about booking Jeff there.
+  const q = `{${quoted}} {${SPEAKING_TERMS}} -from:me -category:promotions -category:social newer_than:${GMAIL_LOOKBACK_DAYS}d -in:spam -in:trash`;
+  const conflicts: EngagementConflict[] = [];
+
+  try {
+    const list = await gmail.users.messages.list({ userId: "me", q, maxResults: 25 });
+    for (const msg of list.data.messages ?? []) {
+      if (!msg.id || (msg.threadId && appSends.threads.has(msg.threadId))) continue;
+      const res = await gmail.users.messages.get({
+        userId: "me",
+        id: msg.id,
+        format: "metadata",
+        metadataHeaders: ["From", "Subject"],
+      });
+      const h = res.data.payload?.headers ?? [];
+      const get = (n: string) =>
+        h.find((x) => x.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
+      const from = get("From");
+      const subject = get("Subject");
+      if (isAutomatedMessage(from, subject)) continue;
+      if (orgSubjects.has(baseSubject(subject))) continue;
+      const fromDomain = orgDomainOfEmail(addressesIn(from)[0]);
+      if (fromDomain && domains.has(fromDomain)) continue; // reported by domain
+      const text = `${subject} ${res.data.snippet ?? ""}`.toLowerCase();
+      const named = names.find((n) => text.includes(n.toLowerCase()));
+      const date = res.data.internalDate
+        ? fmtDate(new Date(Number(res.data.internalDate)).toISOString())
+        : "";
+      conflicts.push({
+        kind: "gmail_mention",
+        leadId: null,
+        leadName: null,
+        detail: `The mailbox has mail from ${from} that mentions ${
+          named ? `"${named}"` : `this organization (${names.map((n) => `"${n}"`).join(" or ")})`
+        }: "${subject}"${date ? ` on ${date}` : ""}. It may be a booking through a speakers bureau or a contact outside the org's own email.`,
+      });
+      break;
+    }
+  } catch (e) {
+    throw new EngagementGuardUnavailableError(
+      e instanceof Error
+        ? `Could not search the mailbox for this organization's name: ${e.message}`
+        : "Could not search the mailbox for this organization's name.",
     );
   }
 

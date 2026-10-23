@@ -60,7 +60,7 @@ Strong speaking themes:
 - The health of American democracy and institutions.
 - Faith, character, and public service.
 
-Good-fit venues: universities and colleges (civic engagement, political science, public policy, leadership programs), think tanks and policy institutes, world-affairs councils, corporate and association keynotes, leadership and ethics forums, bipartisan/civility-focused conferences, and faith-and-public-life events.`;
+Good-fit venues: universities and colleges (civic engagement, political science, public policy, leadership programs), corporate and association keynotes, presidential libraries and civic lecture series, leadership and ethics forums, bipartisan/civility-focused conferences, and faith-and-public-life events.`;
 
 /** Concatenate all text blocks from a Claude message, citation markup removed. */
 export function extractText(message: Anthropic.Message): string {
