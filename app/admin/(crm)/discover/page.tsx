@@ -1,6 +1,7 @@
-import { getActiveRules } from "@/lib/data";
+import { getActiveRules, getRecentDiscoveryRuns } from "@/lib/data";
 import { describeDiscoveryRules } from "@/lib/claude/rules";
 import { DiscoverForm } from "@/components/DiscoverForm";
+import { DiscoveryHistory } from "@/components/DiscoveryHistory";
 
 export const dynamic = "force-dynamic";
 // Discovery does long web-search runs. Allow up to 5 min (effective on Vercel
@@ -8,7 +9,10 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export default async function DiscoverPage() {
-  const rules = await getActiveRules();
+  const [rules, runs] = await Promise.all([
+    getActiveRules(),
+    getRecentDiscoveryRuns(),
+  ]);
   const activeRules = describeDiscoveryRules(rules);
 
   return (
@@ -22,6 +26,7 @@ export default async function DiscoverPage() {
         </p>
       </div>
       <DiscoverForm activeRules={activeRules} />
+      <DiscoveryHistory runs={runs} />
     </div>
   );
 }

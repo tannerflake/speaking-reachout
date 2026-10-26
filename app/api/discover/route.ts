@@ -4,6 +4,8 @@ import { getActiveRules, getExistingLeadKeys } from "@/lib/data";
 import { discoverLeads } from "@/lib/claude/discovery";
 import {
   insertDiscoveredLead,
+  startDiscoveryRun,
+  updateDiscoveryRun,
   type DiscoverySummary,
 } from "@/lib/discovery/persist";
 
@@ -15,7 +17,10 @@ export const maxDuration = 300;
 /**
  * Streams discovered leads as newline-delimited JSON (NDJSON), one event per
  * line, so the UI can render each lead the moment it's generated instead of
- * waiting for the whole batch. Events:
+ * waiting for the whole batch. The run and its leads are also recorded in
+ * discovery_runs, so the Discover page can show them after a refresh or after
+ * the browser disconnects (the server keeps going until the function times
+ * out). Events:
  *   { type: "lead",  lead: InsertedLead }
  *   { type: "done",  summary: DiscoverySummary }
  *   { type: "error", error: string }
@@ -47,12 +52,14 @@ export async function POST(req: NextRequest) {
         }
       };
 
+      const admin = createAdminClient();
+      let runId: string | null = null;
       try {
+        runId = await startDiscoveryRun(admin, requested, focusText);
         const [rules, existing] = await Promise.all([
           getActiveRules(),
           getExistingLeadKeys(),
         ]);
-        const admin = createAdminClient();
         const detail = focusText
           ? `Discovered via focus "${focusText}".`
           : "Discovered via Discover.";
@@ -66,10 +73,11 @@ export async function POST(req: NextRequest) {
           rules,
           existing,
           onLead: async (lead) => {
-            const row = await insertDiscoveredLead(admin, lead, detail);
+            const row = await insertDiscoveredLead(admin, lead, detail, runId);
             if (!row) return;
             inserted += 1;
             if (row.needsLookup) needsLookup += 1;
+            await updateDiscoveryRun(admin, runId, { inserted });
             send({ type: "lead", lead: row });
           },
         });
@@ -81,12 +89,20 @@ export async function POST(req: NextRequest) {
           requested,
           needsLookup,
         };
+        await updateDiscoveryRun(admin, runId, {
+          status: "done",
+          inserted,
+          raw_count: result.rawCount,
+          failed_batches: result.failedBatches,
+        });
         send({ type: "done", summary });
       } catch (e) {
-        send({
-          type: "error",
-          error: e instanceof Error ? e.message : "Discovery failed.",
-        });
+        const message = e instanceof Error ? e.message : "Discovery failed.";
+        await updateDiscoveryRun(admin, runId, {
+          status: "error",
+          error: message,
+        }).catch(() => {});
+        send({ type: "error", error: message });
       } finally {
         if (!closed) {
           try {

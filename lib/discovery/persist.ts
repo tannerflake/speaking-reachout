@@ -32,6 +32,7 @@ export async function insertDiscoveredLead(
   admin: AdminClient,
   lead: DiscoveredLead,
   detail: string,
+  runId: string | null = null,
 ): Promise<InsertedLead | null> {
   const { data, error } = await admin
     .from("leads")
@@ -46,6 +47,9 @@ export async function insertDiscoveredLead(
       fit_rationale: lead.fit_rationale,
       suggested_topics: lead.suggested_topics,
       status: "new",
+      // Only set when the run row exists, so discovery keeps working before
+      // migration 0027 is applied.
+      ...(runId ? { discovery_run_id: runId } : {}),
     })
     .select("id")
     .single();
@@ -80,4 +84,42 @@ export async function insertDiscoveredLead(
     contact_status: contactStatus,
     needsLookup: !contact?.email || contactStatus === "needs_lookup",
   };
+}
+
+/**
+ * Open a discovery_runs row for this run. Returns null when the table is
+ * missing (migration 0027 not applied) so discovery still runs untracked.
+ */
+export async function startDiscoveryRun(
+  admin: AdminClient,
+  requested: number,
+  focus: string | undefined,
+): Promise<string | null> {
+  const { data, error } = await admin
+    .from("discovery_runs")
+    .insert({ requested, focus: focus ?? null })
+    .select("id")
+    .single();
+  if (error || !data) return null;
+  return (data as { id: string }).id;
+}
+
+/** Best-effort update of a run's progress or final outcome. */
+export async function updateDiscoveryRun(
+  admin: AdminClient,
+  runId: string | null,
+  patch: {
+    status?: "done" | "error";
+    inserted?: number;
+    raw_count?: number;
+    failed_batches?: number;
+    error?: string;
+  },
+): Promise<void> {
+  if (!runId) return;
+  const finished = patch.status ? { finished_at: new Date().toISOString() } : {};
+  await admin
+    .from("discovery_runs")
+    .update({ ...patch, ...finished })
+    .eq("id", runId);
 }

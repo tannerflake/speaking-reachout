@@ -379,3 +379,103 @@ export async function getExistingLeadKeys(): Promise<{
 
   return { names, domains, displayNames };
 }
+
+export interface DiscoveryRunLead {
+  id: string;
+  name: string;
+  type: LeadType;
+  status: LeadStatus;
+  location_country: string | null;
+  location_region: string | null;
+  contactsCount: number;
+  emailableContacts: number;
+  draftedContacts: number;
+  hasUnsentDraft: boolean;
+}
+
+export interface DiscoveryRun {
+  id: string;
+  created_at: string;
+  finished_at: string | null;
+  requested: number;
+  focus: string | null;
+  /** "interrupted" = still marked running after the function timeout. */
+  status: "running" | "done" | "error" | "interrupted";
+  inserted: number;
+  raw_count: number | null;
+  failed_batches: number | null;
+  error: string | null;
+  leads: DiscoveryRunLead[];
+}
+
+// Discovery is capped at 300s (maxDuration); a run still "running" well past
+// that was cut off before it could record its outcome.
+const RUN_STALE_MS = 6 * 60 * 1000;
+
+/**
+ * Discover runs from the last `hours`, newest first, each with the leads it
+ * inserted and their contact/draft coverage. Empty when migration 0027 is not
+ * applied yet.
+ */
+export async function getRecentDiscoveryRuns(
+  hours = 24,
+): Promise<DiscoveryRun[]> {
+  const admin = createAdminClient();
+  const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  const { data, error } = await admin
+    .from("discovery_runs")
+    .select(
+      "*, leads(id, name, type, status, location_country, location_region, created_at, contacts(id, email), outreach(status, contact_id))",
+    )
+    .gte("created_at", since)
+    .order("created_at", { ascending: false });
+  if (error || !data) return [];
+
+  type Row = Omit<DiscoveryRun, "leads" | "status"> & {
+    status: "running" | "done" | "error";
+    leads: Array<
+      Pick<
+        Lead,
+        "id" | "name" | "type" | "status" | "location_country" | "location_region"
+      > & {
+        created_at: string;
+        contacts: { id: string; email: string | null }[];
+        outreach: { status: string; contact_id: string | null }[];
+      }
+    >;
+  };
+  return (data as Row[]).map((run) => {
+    const stale =
+      run.status === "running" &&
+      Date.now() - new Date(run.created_at).getTime() > RUN_STALE_MS;
+    const leads = [...(run.leads ?? [])]
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .map((l) => {
+        const contacts = l.contacts ?? [];
+        const emailable = contacts.filter((c) => looksLikeRealEmail(c.email));
+        const covered = new Set(
+          (l.outreach ?? []).map((o) => o.contact_id).filter(Boolean) as string[],
+        );
+        return {
+          id: l.id,
+          name: l.name,
+          type: l.type,
+          status: l.status,
+          location_country: l.location_country,
+          location_region: l.location_region,
+          contactsCount: contacts.length,
+          emailableContacts: emailable.length,
+          draftedContacts: emailable.filter((c) => covered.has(c.id)).length,
+          hasUnsentDraft: (l.outreach ?? []).some((o) => o.status === "draft"),
+        };
+      });
+    return {
+      ...run,
+      status: stale ? "interrupted" : run.status,
+      // The counter is updated per lead, but count the tagged leads too in
+      // case a progress write was missed.
+      inserted: Math.max(run.inserted, leads.length),
+      leads,
+    };
+  });
+}

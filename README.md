@@ -226,6 +226,14 @@ Apply `supabase/migrations/0020_followups.sql` before using this.
   that was already made (the button becomes "Check hunter again anyway").
   Apply `supabase/migrations/0023_contact_lookup_attempted.sql` **before**
   deploying this; contact inserts write the column.
+- **Discover run history** → every Discover run writes a `discovery_runs` row
+  (requested count, focus, found count, status) and tags its leads with
+  `leads.discovery_run_id`. The Discover page lists the last 24 hours of runs
+  from the database, so "6 of 10 found" and each lead's contact/draft
+  coverage survive a refresh. A run still `running` after 6 minutes shows as
+  interrupted (the function timed out). Apply
+  `supabase/migrations/0027_discovery_runs.sql`; until then discovery runs
+  untracked and the history panel is empty.
 
 ---
 
