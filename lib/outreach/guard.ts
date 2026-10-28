@@ -137,17 +137,42 @@ export async function resolveOrganization(
   leadId: string,
   extraEmails: Array<string | null | undefined> = [],
 ): Promise<{ lead: LeadRow; domains: Set<string>; members: LeadRow[] }> {
-  const [leadsRes, contactsRes] = await Promise.all([
-    db.from("leads").select("id, name, name_normalized, status, website"),
-    db.from("contacts").select("lead_id, email"),
-  ]);
-  if (leadsRes.error) throw new Error(leadsRes.error.message);
-  if (contactsRes.error) throw new Error(contactsRes.error.message);
+  return orgMembers(await loadOrgSnapshot(db), leadId, extraEmails);
+}
 
-  const leads = (leadsRes.data ?? []) as LeadRow[];
-  const contacts = (contactsRes.data ?? []) as ContactRow[];
-  const lead = leads.find((l) => l.id === leadId);
-  if (!lead) throw new Error("Lead not found.");
+interface OrgSnapshot {
+  leads: LeadRow[];
+  contacts: ContactRow[];
+  domainsByLead: Map<string, Set<string>>;
+}
+
+/**
+ * Every row of a query, page by page. PostgREST silently stops at 1,000 rows,
+ * and a guard that only sees the first 1,000 contacts fails OPEN.
+ */
+async function selectAll<T>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  query: () => any,
+): Promise<T[]> {
+  const PAGE = 1000;
+  const rows: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await query()
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(error.message);
+    rows.push(...((data ?? []) as T[]));
+    if (!data || data.length < PAGE) return rows;
+  }
+}
+
+async function loadOrgSnapshot(db: Db): Promise<OrgSnapshot> {
+  const [leads, contacts] = await Promise.all([
+    selectAll<LeadRow>(() =>
+      db.from("leads").select("id, name, name_normalized, status, website"),
+    ),
+    selectAll<ContactRow>(() => db.from("contacts").select("id, lead_id, email")),
+  ]);
 
   // Domains per lead: website + every contact's org email domain.
   const domainsByLead = new Map<string, Set<string>>();
@@ -161,6 +186,18 @@ export async function resolveOrganization(
     const d = orgDomainOfEmail(c.email);
     if (d) domainsByLead.get(c.lead_id)?.add(d);
   }
+  return { leads, contacts, domainsByLead };
+}
+
+function orgMembers(
+  snap: OrgSnapshot,
+  leadId: string,
+  extraEmails: Array<string | null | undefined> = [],
+): { lead: LeadRow; domains: Set<string>; members: LeadRow[] } {
+  const { leads, domainsByLead } = snap;
+  const lead = leads.find((l) => l.id === leadId);
+  if (!lead) throw new Error("Lead not found.");
+
   const domains = new Set(domainsByLead.get(leadId) ?? []);
   for (const e of extraEmails) {
     const d = orgDomainOfEmail(e);
@@ -188,22 +225,16 @@ export async function resolveOrganization(
   return { lead, domains, members };
 }
 
-/**
- * Run the engagement guard for a lead. Throws EngagementGuardUnavailableError
- * when the mailbox can't be consulted (callers must treat that as "do not
- * send"). Pass `contactEmail` for the recipient so its domain is included.
- */
-export async function checkEngagementGuard(
-  db: Db,
-  leadId: string,
-  opts: { contactEmail?: string | null; skipGmail?: boolean } = {},
-): Promise<EngagementGuardResult> {
-  const { lead, domains, members } = await resolveOrganization(db, leadId, [
-    opts.contactEmail,
-  ]);
-  const memberIds = members.map((m) => m.id);
-  const conflicts: EngagementConflict[] = [];
+const SENT_OUTREACH_SELECT =
+  "id, lead_id, status, sent_via, sent_at, replied_at, gmail_thread_id, contact:contacts(email, name)";
 
+/** CRM conflicts (steps 1 and 2 of the guard) for a resolved organization. */
+function crmConflicts(
+  leadId: string,
+  members: LeadRow[],
+  sentOutreach: OutreachRow[],
+): EngagementConflict[] {
+  const conflicts: EngagementConflict[] = [];
   // --- 1. CRM: status across every lead in the org ------------------------
   for (const m of members) {
     if (ENGAGED_STATUSES.includes(m.status)) {
@@ -220,18 +251,10 @@ export async function checkEngagementGuard(
   }
 
   // --- 2. CRM: replies and hand-sent outreach anywhere in the org ---------
-  const { data: outreachData, error: outreachErr } = await db
-    .from("outreach")
-    .select(
-      "id, lead_id, status, sent_via, sent_at, replied_at, gmail_thread_id, contact:contacts(email, name)",
-    )
-    .in("lead_id", memberIds)
-    .eq("status", "sent");
-  if (outreachErr) throw new Error(outreachErr.message);
-  const outreach = ((outreachData ?? []) as unknown as OutreachRow[]).map((o) => ({
-    ...o,
-    contact: one(o.contact),
-  }));
+  const memberIds = new Set(members.map((m) => m.id));
+  const outreach = sentOutreach
+    .filter((o) => memberIds.has(o.lead_id))
+    .map((o) => ({ ...o, contact: one(o.contact) }));
   const nameOf = (id: string) => members.find((m) => m.id === id)?.name ?? null;
 
   const repliedLeads = new Set<string>();
@@ -261,6 +284,75 @@ export async function checkEngagementGuard(
     }
   }
 
+  return conflicts;
+}
+
+/**
+ * CRM-only guard verdict for many leads at once (one snapshot, no mailbox):
+ * the reason each blocked lead would be refused at drafting or queueing.
+ * The Leads list uses it so a blocked lead reads as blocked instead of
+ * looking like an unfinished lead that every bulk run retries.
+ */
+export async function crmBlockReasons(
+  db: Db,
+  leadIds: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (leadIds.length === 0) return out;
+  const [snap, sent] = await Promise.all([
+    loadOrgSnapshot(db),
+    selectAll<OutreachRow>(() =>
+      db.from("outreach").select(SENT_OUTREACH_SELECT).eq("status", "sent"),
+    ),
+  ]);
+  for (const id of leadIds) {
+    if (!snap.leads.some((l) => l.id === id)) continue;
+    const { members, domains } = orgMembers(snap, id);
+    const conflicts = crmConflicts(id, members, sent);
+    if (conflicts.length === 0) continue;
+    out.set(
+      id,
+      summarizeConflicts({
+        blocked: true,
+        conflicts,
+        siblings: [],
+        domains: [...domains],
+        names: [],
+        gmailChecked: false,
+      }),
+    );
+  }
+  return out;
+}
+
+/**
+ * Run the engagement guard for a lead. Throws EngagementGuardUnavailableError
+ * when the mailbox can't be consulted (callers must treat that as "do not
+ * send"). Pass `contactEmail` for the recipient so its domain is included.
+ */
+export async function checkEngagementGuard(
+  db: Db,
+  leadId: string,
+  opts: { contactEmail?: string | null; skipGmail?: boolean } = {},
+): Promise<EngagementGuardResult> {
+  const { lead, domains, members } = await resolveOrganization(db, leadId, [
+    opts.contactEmail,
+  ]);
+  const memberIds = members.map((m) => m.id);
+
+  // --- 1 & 2. CRM: statuses, replies and hand-sent outreach in the org ----
+  const { data: outreachData, error: outreachErr } = await db
+    .from("outreach")
+    .select(SENT_OUTREACH_SELECT)
+    .in("lead_id", memberIds)
+    .eq("status", "sent");
+  if (outreachErr) throw new Error(outreachErr.message);
+  const conflicts = crmConflicts(
+    leadId,
+    members,
+    (outreachData ?? []) as unknown as OutreachRow[],
+  );
+
   // --- 3. Live mailbox -----------------------------------------------------
   const names = [
     ...new Set(members.flatMap((m) => organizationSearchPhrases(m.name))),
@@ -270,12 +362,13 @@ export async function checkEngagementGuard(
     // Every thread this app ever started, CRM-wide, so an app send to the
     // same domain from any lead is recognized as ours rather than as a
     // hand-written thread.
-    const { data: appRows, error: appErr } = await db
-      .from("outreach")
-      .select("lead_id, gmail_thread_id, subject, contact:contacts(email)")
-      .eq("sent_via", "app")
-      .eq("status", "sent");
-    if (appErr) throw new Error(appErr.message);
+    const appRows = await selectAll<unknown>(() =>
+      db
+        .from("outreach")
+        .select("id, lead_id, gmail_thread_id, subject, contact:contacts(email)")
+        .eq("sent_via", "app")
+        .eq("status", "sent"),
+    );
     const appSends: AppSends = { threads: new Set(), recipients: new Set() };
     // Subjects of what this app sent to this org: a forward or reply of our
     // own pitch names the org too, and isn't a sign of another conversation.

@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getContactResolver } from "@/lib/contacts/resolver";
 import {
   MAX_CONTACTS_PER_LEAD,
+  MAX_CONTACT_ROWS_PER_LEAD,
   findContactsMultiSource,
 } from "@/lib/contacts/multiSource";
 import { personKey } from "@/lib/contacts/personKey";
@@ -379,14 +380,26 @@ export async function findMultipleContacts(leadId: string): Promise<MultiFindRes
   const filled = await fillMissingEmails(supabase, lead, existing);
   let hunterUsedForExisting = filled > 0;
 
-  // The cap is on every contact, emailed or not. Counting only emailed ones
-  // let each run on a no-email org add another full batch.
-  const slots = MAX_CONTACTS_PER_LEAD - existing.length;
+  // Contacts the provider already failed to find an email for (or blank
+  // rows) don't hold a slot, so a no-email org gets a second batch of new
+  // people instead of sitting at "7 contacts, no email" forever. The row
+  // ceiling still bounds it: counting only emailed contacts used to let
+  // every run on a no-email org add another full batch.
+  const live = existing.filter(
+    (c) => looksLikeRealEmail(c.email) || (c.name && !c.email_lookup_attempted_at),
+  ).length;
+  const slots = Math.min(
+    MAX_CONTACTS_PER_LEAD - live,
+    MAX_CONTACT_ROWS_PER_LEAD - existing.length,
+  );
   if (slots <= 0) {
     return {
       ...empty,
       hunterUsed: hunterUsedForExisting,
-      error: `This lead already has ${MAX_CONTACTS_PER_LEAD} contacts.`,
+      error:
+        existing.length >= MAX_CONTACT_ROWS_PER_LEAD && live === 0
+          ? `No usable email found after ${existing.length} contacts; stopped searching this lead.`
+          : `This lead already has ${MAX_CONTACTS_PER_LEAD} contacts.`,
     };
   }
 
@@ -434,7 +447,7 @@ export async function findMultipleContacts(leadId: string): Promise<MultiFindRes
         !takenKeys.has(personKey(c.name)) &&
         !(c.email && takenEmails.has(c.email.toLowerCase())),
     )
-    .slice(0, Math.max(0, MAX_CONTACTS_PER_LEAD - taken.length));
+    .slice(0, Math.max(0, Math.min(slots, MAX_CONTACT_ROWS_PER_LEAD - taken.length)));
   if (toInsert.length === 0) {
     return {
       ...empty,

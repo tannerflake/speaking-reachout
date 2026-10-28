@@ -26,6 +26,12 @@ export { personKey };
  */
 
 export const MAX_CONTACTS_PER_LEAD = 7;
+/**
+ * Hard ceiling on contact rows per lead, emailed or not. When a full batch
+ * comes back with no usable emails the finder gets one more batch of new
+ * people; past this ceiling the lead is a dead end and stops being searched.
+ */
+export const MAX_CONTACT_ROWS_PER_LEAD = MAX_CONTACTS_PER_LEAD * 2;
 
 const PROVIDER_TIMEOUT_MS = 150_000;
 

@@ -7,6 +7,8 @@ import {
   orgDomainOfEmail,
   registrableDomain,
 } from "@/lib/utils";
+import { crmBlockReasons } from "@/lib/outreach/guard";
+import { MAX_CONTACT_ROWS_PER_LEAD } from "@/lib/contacts/multiSource";
 import type {
   Booking,
   Contact,
@@ -47,6 +49,15 @@ export interface LeadListRow extends Lead {
    * started the conversation, "gmail" means it was started by hand.
    */
   originatedVia: OutreachChannel | null;
+  /**
+   * Why the engagement guard refuses this lead (the organization is already
+   * in a conversation), or null. Set from the CRM check that blocks drafting
+   * and from drafts the send-time mailbox check parked as 'blocked'. Bulk
+   * runs skip these instead of retrying them every day.
+   */
+  blockedReason: string | null;
+  /** Every contact search came back without a usable email; stopped looking. */
+  contactSearchExhausted: boolean;
 }
 
 export interface LeadFilters {
@@ -88,7 +99,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
   let query = supabase
     .from("leads")
     .select(
-      "*, contacts(id, email), interactions(created_at), outreach(status, sent_via, sent_at, contact_id)",
+      "*, contacts(id, email), interactions(created_at), outreach(status, sent_via, sent_at, contact_id, error)",
     )
     .order("created_at", { ascending: false });
 
@@ -106,9 +117,23 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
       sent_via: OutreachChannel;
       sent_at: string | null;
       contact_id: string | null;
+      error: string | null;
     }[];
   };
-  return ((data as Row[]) ?? []).map((row) => {
+  const rows = (data as Row[]) ?? [];
+  // Only leads nothing has been sent to yet can be stuck behind the guard.
+  let crmBlocked = new Map<string, string>();
+  try {
+    crmBlocked = await crmBlockReasons(
+      supabase,
+      rows
+        .filter((r) => !(r.outreach ?? []).some((o) => o.status === "sent"))
+        .map((r) => r.id),
+    );
+  } catch {
+    // Advisory only: the list still renders, and drafting/sending re-check.
+  }
+  return rows.map((row) => {
     const firstSent = (row.outreach ?? [])
       .filter((o) => o.status === "sent" && o.sent_at)
       .sort((a, b) => (a.sent_at as string).localeCompare(b.sent_at as string))[0];
@@ -133,6 +158,12 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
       hasUnsentDraft: (row.outreach ?? []).some((o) => o.status === "draft"),
       queuedCount: (row.outreach ?? []).filter((o) => o.status === "queued").length,
       originatedVia: firstSent?.sent_via ?? null,
+      blockedReason:
+        crmBlocked.get(row.id) ??
+        (row.outreach ?? []).find((o) => o.status === "blocked")?.error ??
+        null,
+      contactSearchExhausted:
+        emailable.length === 0 && contacts.length >= MAX_CONTACT_ROWS_PER_LEAD,
     };
   });
 }

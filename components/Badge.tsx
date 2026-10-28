@@ -94,14 +94,39 @@ export function SourceBadge({ source }: { source: LeadSource }) {
 export function ContactGapBadge({
   contactsCount,
   hasContactEmail,
+  exhausted = false,
 }: {
   contactsCount: number;
   hasContactEmail: boolean;
+  /** Every contact search came back without an email; nothing more to try. */
+  exhausted?: boolean;
 }) {
   if (hasContactEmail) return null;
+  if (exhausted) {
+    return (
+      <Pill
+        className="border-zinc-200 bg-zinc-50 text-zinc-500"
+        title="Two rounds of contact search found nobody with a usable email. Bulk runs skip this lead; add an email by hand on the lead page."
+      >
+        No email found
+      </Pill>
+    );
+  }
   return (
     <Pill className="border-amber-200 bg-amber-50 text-amber-700">
       {contactsCount === 0 ? "No contact" : "No email"}
+    </Pill>
+  );
+}
+
+/**
+ * The engagement guard refuses this lead: the organization is already in a
+ * conversation. Hover for the reason; the lead page has the override.
+ */
+export function BlockedBadge({ reason }: { reason: string }) {
+  return (
+    <Pill className="border-zinc-300 bg-zinc-100 text-zinc-700" title={reason}>
+      Blocked
     </Pill>
   );
 }

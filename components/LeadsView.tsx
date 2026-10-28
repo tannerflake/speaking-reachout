@@ -11,6 +11,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  BlockedBadge,
   ContactGapBadge,
   DraftGapBadge,
   OriginBadge,
@@ -418,9 +419,39 @@ export function LeadsView({
     }
   }
 
+  /**
+   * Split the selection into leads a bulk run can move forward and leads it
+   * can't: blocked by the engagement guard (org already in conversation) or,
+   * when contacts would be searched, out of people to try. Retrying those
+   * every day is what made them pile up, so they are skipped and named.
+   */
+  function splitSelection(opts: { needsContacts: boolean }) {
+    const chosen = filtered.filter((r) => selected.has(r.id));
+    const blocked = chosen.filter((r) => r.blockedReason);
+    const exhausted = opts.needsContacts
+      ? chosen.filter((r) => !r.blockedReason && r.contactSearchExhausted)
+      : [];
+    const skip = new Set([...blocked, ...exhausted].map((r) => r.id));
+    const runnable = chosen.filter((r) => !skip.has(r.id));
+    const parts = [
+      blocked.length
+        ? `${blocked.length} blocked because the organization is already in a conversation (hover "Blocked" for why)`
+        : "",
+      exhausted.length
+        ? `${exhausted.length} with no email found after two contact searches`
+        : "",
+    ].filter(Boolean);
+    const note = parts.length ? ` Skipped ${parts.join(" and ")}.` : "";
+    return { runnable, note };
+  }
+
   function runBulkDraft() {
-    const ids = Array.from(selected);
-    if (ids.length === 0) return;
+    const { runnable, note } = splitSelection({ needsContacts: false });
+    const ids = runnable.map((r) => r.id);
+    if (ids.length === 0) {
+      if (note) setMsg(`Nothing to draft.${note}`);
+      return;
+    }
     setMsg(null);
     markWorking(ids, "drafting");
     start(async () => {
@@ -429,7 +460,7 @@ export function LeadsView({
         setMsg(
           `Drafted ${res.created} outreach email${res.created === 1 ? "" : "s"}${
             res.failed ? `, ${res.failed} failed` : ""
-          }. Open a lead to review and send.`,
+          }. Open a lead to review and send.${note}`,
         );
         setSelected(new Set());
         router.refresh();
@@ -482,8 +513,12 @@ export function LeadsView({
 
   /** Find contacts, then draft one email per contact, for each selected lead. */
   function runBulkEnrich() {
-    const ids = Array.from(selected);
-    if (ids.length === 0) return;
+    const { runnable, note } = splitSelection({ needsContacts: true });
+    const ids = runnable.map((r) => r.id);
+    if (ids.length === 0) {
+      if (note) setMsg(`Nothing to prepare.${note}`);
+      return;
+    }
     ask(
       `Find contacts and draft outreach for ${ids.length} lead${
         ids.length === 1 ? "" : "s"
@@ -525,7 +560,7 @@ export function LeadsView({
           setMsg(
             `Ready to send: ${drafts} draft${drafts === 1 ? "" : "s"} across ${ids.length} lead${
               ids.length === 1 ? "" : "s"
-            } (${contacts} contacts with email${errors ? `, ${errors} lead${errors === 1 ? "" : "s"} had a problem` : ""}). Select them and press Send.`,
+            } (${contacts} contacts with email${errors ? `, ${errors} lead${errors === 1 ? "" : "s"} had a problem` : ""}). Select them and press Send.${note}`,
           );
           router.refresh();
         });
@@ -542,12 +577,15 @@ export function LeadsView({
    * would block their sends anyway, so a lookup would be wasted spend).
    */
   function runBulkSend() {
-    const ids = Array.from(selected);
-    if (ids.length === 0) return;
+    const { runnable: chosen, note } = splitSelection({ needsContacts: true });
+    const ids = chosen.map((r) => r.id);
+    if (ids.length === 0) {
+      if (note) setMsg(`Nothing to send.${note}`);
+      return;
+    }
     const label =
       SPREAD_OPTIONS.find((o) => o.value === spread)?.label ??
       `over ${spread} min`;
-    const chosen = filtered.filter((r) => selected.has(r.id));
     const toFind = chosen
       .filter((r) => !r.originatedVia && r.emailableContacts === 0)
       .map((r) => r.id);
@@ -627,13 +665,13 @@ export function LeadsView({
             res = await queueSendForLeads(ids, spread);
           } catch (e) {
             setMsg(
-              `${prepSummary}Could not queue: ${e instanceof Error ? e.message : "request failed"}`,
+              `${prepSummary}Could not queue: ${e instanceof Error ? e.message : "request failed"}${note}`,
             );
             router.refresh();
             return;
           }
           if (res.error) {
-            setMsg(`${prepSummary}Could not queue: ${res.error}`);
+            setMsg(`${prepSummary}Could not queue: ${res.error}${note}`);
           } else if (res.queued === 0) {
             setMsg(
               prepSummary +
@@ -645,7 +683,8 @@ export function LeadsView({
                       res.skipped
                         ? ` (${res.skipped} draft${res.skipped === 1 ? "" : "s"} lack a valid email)`
                         : ""
-                    }.`),
+                    }.`) +
+                note,
             );
           } else {
             setMsg(
@@ -655,7 +694,7 @@ export function LeadsView({
                 res.blocked
                   ? `. ${res.blocked} blocked: already in conversation with that organization`
                   : ""
-              }.`,
+              }.${note}`,
             );
           }
           setSelected(new Set());
@@ -1004,11 +1043,21 @@ export function LeadsView({
                       <ContactGapBadge
                         contactsCount={r.contactsCount}
                         hasContactEmail={r.hasContactEmail}
+                        exhausted={r.contactSearchExhausted}
                       />
                     </div>
                   </td>
                   <td className="text-zinc-600">
-                    {r.emailableContacts === 0 ? (
+                    {r.blockedReason ? (
+                      <div className="flex items-center gap-2">
+                        {r.emailableContacts > 0 && (
+                          <span>
+                            {r.draftedContacts}/{r.emailableContacts}
+                          </span>
+                        )}
+                        <BlockedBadge reason={r.blockedReason} />
+                      </div>
+                    ) : r.emailableContacts === 0 ? (
                       <span className="text-zinc-400">—</span>
                     ) : (
                       <div className="flex items-center gap-2">

@@ -66,7 +66,7 @@ export const GENERIC_EMAIL_DOMAINS = new Set([
 
 /** Organization domain of an email address, or null for personal providers. */
 export function orgDomainOfEmail(email: string | null | undefined): string | null {
-  if (!email) return null;
+  if (!email || !looksLikeRealEmail(email)) return null;
   const at = email.trim().toLowerCase().lastIndexOf("@");
   if (at < 0) return null;
   const d = registrableDomain(email.trim().toLowerCase().slice(at + 1));
@@ -205,5 +205,12 @@ export function looksLikeRealEmail(email: string | null | undefined): boolean {
   // Reject placeholder patterns some providers return for locked emails.
   if (e.includes("not_unlocked") || e.includes("email_not")) return false;
   if (e.startsWith("noreply") || e.startsWith("no-reply")) return false;
+  // Scraped asset filenames ("jane-doe-150x150@2x.jpg") pass the shape test.
+  // Saved as emails they also give the engagement guard a fake shared
+  // "domain" (2x.jpg) that ties unrelated organizations together.
+  if (FILE_EXTENSION_TLD.test(e) || /@\d+x\./.test(e)) return false;
   return true;
 }
+
+const FILE_EXTENSION_TLD =
+  /\.(jpe?g|png|gif|webp|avif|svg|bmp|ico|tiff?|heic|pdf|css|js|json|html?|php|mp4|mov)$/;
