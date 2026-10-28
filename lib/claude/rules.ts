@@ -101,8 +101,16 @@ export function describeDiscoveryRules(rules: TailoringRule[]): string[] {
     .map((r) => r.raw_instruction);
 }
 
-/** Build the constraints block injected into the discovery prompt. */
-export function discoveryRulesPrompt(rules: TailoringRule[]): string {
+/**
+ * Build the constraints block injected into the discovery prompt. A focused
+ * run gets only the exclusions (countries, keywords, venue types to avoid);
+ * the prioritize/focus targeting rules are dropped so they can't pull the
+ * search away from the operator's focus.
+ */
+export function discoveryRulesPrompt(
+  rules: TailoringRule[],
+  opts: { focused?: boolean } = {},
+): string {
   const filters = discoveryFilters(rules);
   const targets = targetingValues(rules);
   const lines: string[] = [];
@@ -124,11 +132,16 @@ export function discoveryRulesPrompt(rules: TailoringRule[]): string {
   const deprioritize = targets.flatMap((t) => t.deprioritize_types ?? []);
   const focuses = targets.map((t) => t.focus).filter(Boolean) as string[];
 
-  if (prioritize.length)
-    lines.push(`- Prioritize these kinds of venues: ${prioritize.join(", ")}.`);
-  if (deprioritize.length)
-    lines.push(`- Deprioritize: ${deprioritize.join(", ")}.`);
-  for (const f of focuses) lines.push(`- Focus: ${f}.`);
+  if (opts.focused) {
+    if (deprioritize.length)
+      lines.push(`- Do NOT return these kinds of venues: ${deprioritize.join(", ")}.`);
+  } else {
+    if (prioritize.length)
+      lines.push(`- Prioritize these kinds of venues: ${prioritize.join(", ")}.`);
+    if (deprioritize.length)
+      lines.push(`- Deprioritize: ${deprioritize.join(", ")}.`);
+    for (const f of focuses) lines.push(`- Focus: ${f}.`);
+  }
 
   if (lines.length === 0) return "";
   return `\nActive operator rules you MUST respect:\n${lines.join("\n")}\n`;

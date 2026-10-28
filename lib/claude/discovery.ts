@@ -84,7 +84,9 @@ export async function discoverLeads(params: {
   onLead?: (lead: DiscoveredLead) => void | Promise<void>;
 }): Promise<DiscoveryResult> {
   const target = Math.max(1, Math.min(params.count, 100));
-  const rulesBlock = discoveryRulesPrompt(params.rules);
+  const rulesBlock = discoveryRulesPrompt(params.rules, {
+    focused: Boolean(params.focus),
+  });
 
   // Tell the model what's already taken so it doesn't waste searches.
   const knownNames = params.existing.displayNames ?? [];
