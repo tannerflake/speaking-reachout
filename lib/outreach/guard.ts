@@ -326,6 +326,26 @@ export async function crmBlockReasons(
 }
 
 /**
+ * Move leads between "new" and "blocked" to match the guard's verdict. Only
+ * those two statuses are touched: a lead anywhere further along the pipeline
+ * keeps its status. Best-effort: before migration 0028 the "blocked" status
+ * is rejected by the database and leads simply stay "new".
+ */
+export async function setLeadsBlocked(
+  db: Db,
+  leadIds: string[],
+  blocked: boolean,
+): Promise<boolean> {
+  if (leadIds.length === 0) return true;
+  const { error } = await db
+    .from("leads")
+    .update({ status: blocked ? "blocked" : "new" })
+    .in("id", leadIds)
+    .eq("status", blocked ? "new" : "blocked");
+  return !error;
+}
+
+/**
  * Run the engagement guard for a lead. Throws EngagementGuardUnavailableError
  * when the mailbox can't be consulted (callers must treat that as "do not
  * send"). Pass `contactEmail` for the recipient so its domain is included.

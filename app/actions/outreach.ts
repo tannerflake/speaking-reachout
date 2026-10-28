@@ -16,6 +16,7 @@ import {
 } from "@/lib/outreach/send";
 import {
   checkEngagementGuard,
+  setLeadsBlocked,
   summarizeConflicts,
   type EngagementGuardResult,
 } from "@/lib/outreach/guard";
@@ -36,6 +37,7 @@ async function draftingBlocked(
   const supabase = await createClient();
   const guard = await checkEngagementGuard(supabase, leadId, { skipGmail: true });
   if (!guard.blocked) return null;
+  await setLeadsBlocked(supabase, [leadId], true);
   return `Not drafted. ${summarizeConflicts(guard)} Use "Draft anyway" if this is deliberate.`;
 }
 

@@ -6,6 +6,7 @@ import { startSequence } from "@/lib/followups/run";
 import {
   EngagementGuardUnavailableError,
   checkEngagementGuard,
+  setLeadsBlocked,
   summarizeConflicts,
 } from "@/lib/outreach/guard";
 import { looksLikeRealEmail } from "@/lib/utils";
@@ -37,7 +38,13 @@ export interface SendRowResult {
  * Park a row as 'blocked' with the reason. Falls back to 'failed' if the
  * database predates migration 0024; either way nothing is sent.
  */
-async function markBlocked(db: Db, outreachId: string, reason: string): Promise<void> {
+async function markBlocked(
+  db: Db,
+  outreachId: string,
+  leadId: string,
+  reason: string,
+): Promise<void> {
+  await setLeadsBlocked(db, [leadId], true);
   const { error } = await db
     .from("outreach")
     .update({ status: "blocked", error: reason, scheduled_for: null })
@@ -99,7 +106,7 @@ export async function sendOutreachRow(
     }
     if (guard.blocked) {
       const reason = summarizeConflicts(guard);
-      await markBlocked(db, outreachId, reason);
+      await markBlocked(db, outreachId, row.lead_id, reason);
       await db.from("interactions").insert({
         lead_id: row.lead_id,
         kind: "note",
@@ -134,12 +141,13 @@ export async function sendOutreachRow(
       })
       .eq("id", outreachId);
 
-    // Auto-advance only from 'new' so a later-stage lead is never downgraded.
+    // Auto-advance only from 'new' (or 'blocked', for an override send) so a
+    // later-stage lead is never downgraded.
     await db
       .from("leads")
       .update({ status: "reached_out" })
       .eq("id", row.lead_id)
-      .eq("status", "new");
+      .in("status", ["new", "blocked"]);
 
     await db.from("interactions").insert({
       lead_id: row.lead_id,
@@ -255,7 +263,7 @@ export async function queueOutreachForLeads(
     }
     if (v.blocked) {
       blocked += 1;
-      await markBlocked(db, r.id, v.reason);
+      await markBlocked(db, r.id, r.lead_id, v.reason);
       await db.from("interactions").insert({
         lead_id: r.lead_id,
         kind: "note",

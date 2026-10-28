@@ -427,15 +427,15 @@ export function LeadsView({
    */
   function splitSelection(opts: { needsContacts: boolean }) {
     const chosen = filtered.filter((r) => selected.has(r.id));
-    const blocked = chosen.filter((r) => r.blockedReason);
+    const blocked = chosen.filter((r) => r.blockedReason || r.status === "blocked");
     const exhausted = opts.needsContacts
-      ? chosen.filter((r) => !r.blockedReason && r.contactSearchExhausted)
+      ? chosen.filter((r) => !blocked.includes(r) && r.contactSearchExhausted)
       : [];
     const skip = new Set([...blocked, ...exhausted].map((r) => r.id));
     const runnable = chosen.filter((r) => !skip.has(r.id));
     const parts = [
       blocked.length
-        ? `${blocked.length} blocked because the organization is already in a conversation (hover "Blocked" for why)`
+        ? `${blocked.length} blocked because the organization is already in a conversation (hover the Blocked status for why)`
         : "",
       exhausted.length
         ? `${exhausted.length} with no email found after two contact searches`
@@ -1028,7 +1028,10 @@ export function LeadsView({
                   </td>
                   <td className="text-zinc-600">{r.location_country ?? "—"}</td>
                   <td>
-                    <StatusBadge status={r.status} />
+                    <StatusBadge
+                      status={r.status}
+                      title={r.status === "blocked" ? (r.blockedReason ?? undefined) : undefined}
+                    />
                   </td>
                   <td>
                     {r.originatedVia ? (
@@ -1048,7 +1051,7 @@ export function LeadsView({
                     </div>
                   </td>
                   <td className="text-zinc-600">
-                    {r.blockedReason ? (
+                    {r.blockedReason && r.status !== "blocked" ? (
                       <div className="flex items-center gap-2">
                         {r.emailableContacts > 0 && (
                           <span>

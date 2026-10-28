@@ -5,6 +5,7 @@ export type LeadType = "event" | "institution" | "other";
 
 export type LeadStatus =
   | "new"
+  | "blocked"
   | "reached_out"
   | "followup_1"
   | "followup_2"
@@ -19,6 +20,7 @@ export type LeadStatus =
 
 export const LEAD_STATUSES: LeadStatus[] = [
   "new",
+  "blocked",
   "reached_out",
   "followup_1",
   "followup_2",

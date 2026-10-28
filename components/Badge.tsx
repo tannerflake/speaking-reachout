@@ -32,8 +32,12 @@ function Pill({
   );
 }
 
-export function StatusBadge({ status }: { status: LeadStatus }) {
-  return <Pill className={statusClasses(status)}>{statusLabel(status)}</Pill>;
+export function StatusBadge({ status, title }: { status: LeadStatus; title?: string }) {
+  return (
+    <Pill className={statusClasses(status)} title={title}>
+      {statusLabel(status)}
+    </Pill>
+  );
 }
 
 export function ContactStatusBadge({ status }: { status: ContactStatus }) {

@@ -7,7 +7,7 @@ import {
   orgDomainOfEmail,
   registrableDomain,
 } from "@/lib/utils";
-import { crmBlockReasons } from "@/lib/outreach/guard";
+import { crmBlockReasons, setLeadsBlocked } from "@/lib/outreach/guard";
 import { MAX_CONTACT_ROWS_PER_LEAD } from "@/lib/contacts/multiSource";
 import type {
   Booking,
@@ -123,6 +123,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
   const rows = (data as Row[]) ?? [];
   // Only leads nothing has been sent to yet can be stuck behind the guard.
   let crmBlocked = new Map<string, string>();
+  let crmChecked = false;
   try {
     crmBlocked = await crmBlockReasons(
       supabase,
@@ -130,10 +131,11 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
         .filter((r) => !(r.outreach ?? []).some((o) => o.status === "sent"))
         .map((r) => r.id),
     );
+    crmChecked = true;
   } catch {
     // Advisory only: the list still renders, and drafting/sending re-check.
   }
-  return rows.map((row) => {
+  const listed = rows.map((row) => {
     const firstSent = (row.outreach ?? [])
       .filter((o) => o.status === "sent" && o.sent_at)
       .sort((a, b) => (a.sent_at as string).localeCompare(b.sent_at as string))[0];
@@ -166,6 +168,22 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
         emailable.length === 0 && contacts.length >= MAX_CONTACT_ROWS_PER_LEAD,
     };
   });
+
+  // Keep the status column in step with the guard: a new lead it refuses
+  // becomes "blocked", and a blocked lead whose conflict is gone (say, a
+  // false match that was fixed) goes back to "new".
+  const toBlock = listed.filter((r) => r.status === "new" && r.blockedReason);
+  // Never unblock on a failed check: an empty verdict there means "unknown".
+  const toUnblock = crmChecked
+    ? listed.filter((r) => r.status === "blocked" && !r.blockedReason)
+    : [];
+  const [blockedOk, unblockedOk] = await Promise.all([
+    setLeadsBlocked(supabase, toBlock.map((r) => r.id), true),
+    setLeadsBlocked(supabase, toUnblock.map((r) => r.id), false),
+  ]);
+  if (blockedOk) for (const r of toBlock) r.status = "blocked";
+  if (unblockedOk) for (const r of toUnblock) r.status = "new";
+  return listed;
 }
 
 export async function listCountries(): Promise<string[]> {
