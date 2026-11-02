@@ -19,6 +19,7 @@ The email MUST:
 - Propose 1-3 concrete talk topics tailored to that audience.
 - Make a genuine, specific case for why Jeff Flake is the right speaker for THIS venue (tie his background to their audience/mission).
 - Optionally include 1-2 relevant links (an article, talk, or story) that support the pitch.
+- Include one brief, natural mention of the honorarium, framed as something to work out in later emails, so the reader knows this is a paid engagement (e.g. "If you're interested, we can discuss the honorarium and other details."). Keep it to a single passing clause woven into the ask. Do not call it "customary", do not mention travel expenses, and give no dollar figure, no fee range, and no hint that the fee is flexible or negotiable.
 - Be appropriately concise and professional; ready to send with light editing.
 - Open with an appropriate greeting (use the contact's name if provided) and close with a clear, low-friction ask for a call or reply.
 
