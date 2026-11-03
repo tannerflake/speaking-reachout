@@ -2,6 +2,7 @@ import { SPEAKER_PROFILE, generateWithWebSearch } from "@/lib/claude/client";
 import { extractJson } from "@/lib/claude/json";
 import { copyStyleInstructions, enforceStyle } from "@/lib/claude/style";
 import type { Contact, Lead, TailoringRule } from "@/lib/types";
+import { ensureHonorarium } from "@/lib/outreach/honorarium";
 import { greetingFor } from "@/lib/outreach/orgName";
 
 /** A first line that is only a greeting: "Dear there,", "Hi team,", "Hello,". */
@@ -19,7 +20,7 @@ The email MUST:
 - Propose 1-3 concrete talk topics tailored to that audience.
 - Make a genuine, specific case for why Jeff Flake is the right speaker for THIS venue (tie his background to their audience/mission).
 - Optionally include 1-2 relevant links (an article, talk, or story) that support the pitch.
-- Include one brief, natural mention of the honorarium, framed as something to work out in later emails, so the reader knows this is a paid engagement (e.g. "If you're interested, we can discuss the honorarium and other details."). Keep it to a single passing clause woven into the ask. Do not call it "customary", do not mention travel expenses, and give no dollar figure, no fee range, and no hint that the fee is flexible or negotiable.
+- Always include one sentence near the closing ask that names the honorarium as something to discuss next, so the reader knows this is a paid engagement. Use Cheryl's own phrasing: "If this is of interest, I would love to discuss timing, logistics, and the honorarium with you." ("speaking fees" may stand in for "the honorarium"). Light rewording to fit the email is fine, but the money must be named explicitly. Do not call it "customary", do not mention travel expenses, and give no dollar figure, no fee range, and no hint that the fee is flexible or negotiable.
 - Be appropriately concise and professional; ready to send with light editing.
 - Open with an appropriate greeting (use the contact's name if provided) and close with a clear, low-friction ask for a call or reply.
 
@@ -111,7 +112,7 @@ Research the org/event with web search, then return the JSON { subject, body }.`
 
   // Hard style enforcement (Section 6/7): strip/rewrite violations.
   const subj = enforceStyle(rawSubject, rules);
-  const body = enforceStyle(rawBody, rules);
+  const body = enforceStyle(ensureHonorarium(rawBody) ?? rawBody, rules);
 
   return {
     subject: subj.text,

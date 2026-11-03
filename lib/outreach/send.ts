@@ -9,6 +9,7 @@ import {
   setLeadsBlocked,
   summarizeConflicts,
 } from "@/lib/outreach/guard";
+import { HONORARIUM_LINE, ensureHonorarium } from "@/lib/outreach/honorarium";
 import { looksLikeRealEmail } from "@/lib/utils";
 import type { Contact, Outreach } from "@/lib/types";
 
@@ -116,6 +117,23 @@ export async function sendOutreachRow(
     }
   }
 
+  // A first email must say this is a paid engagement. Fold the line in if the
+  // draft lacks it (older drafts, hand edits); refuse if there's nowhere
+  // sensible to put it. Follow-ups are left alone.
+  let body = row.body;
+  if ((row.sequence_step ?? 0) === 0) {
+    const withHonorarium = ensureHonorarium(body);
+    if (withHonorarium === null) {
+      const message = `Not sent: this first email doesn't mention the honorarium. Add a line such as "${HONORARIUM_LINE}" and send again.`;
+      await db
+        .from("outreach")
+        .update({ status: "failed", error: message, scheduled_for: null })
+        .eq("id", outreachId);
+      return { error: message, leadId: row.lead_id };
+    }
+    body = withHonorarium;
+  }
+
   try {
     // Every initial outreach carries the one-page speaking overview; the
     // email copy refers to it, so sending without it would be a broken
@@ -124,7 +142,7 @@ export async function sendOutreachRow(
     const result = await sendGmail({
       to: email as string,
       subject: row.subject,
-      body: row.body,
+      body,
       attachments: [onePager],
     });
 
@@ -133,6 +151,7 @@ export async function sendOutreachRow(
       .from("outreach")
       .update({
         status: "sent",
+        body,
         gmail_message_id: result.messageId,
         gmail_thread_id: result.threadId,
         sent_at: sentAt,
