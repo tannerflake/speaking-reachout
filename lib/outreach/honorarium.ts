@@ -12,17 +12,41 @@ export const HONORARIUM_MENTION = /honorari(um|a)|\bfees?\b/i;
 export const HONORARIUM_LINE =
   "If this is of interest, I would love to discuss timing, logistics, and the honorarium with you.";
 
+/**
+ * A sentence offering fee flexibility: "We're flexible on fee and happy to
+ * work within the endowment's range." Cheryl handles that on the call, never
+ * in writing.
+ */
+const FEE_FLEXIBILITY =
+  /flexib\w*[^.!?]*\b(fees?|honorari\w*|budget|range|terms)\b|\b(fees?|honorari\w*|budget)\b[^.!?]*flexib|work within (your|their|the|its|any)\b[^.!?]*\b(range|budget)\b/i;
+
+/** Drop any sentence that offers fee flexibility, and any paragraph it empties. */
+export function stripFeeFlexibility(body: string): string {
+  return body
+    .split(/\n\s*\n/)
+    .map((p) =>
+      p
+        .split(/(?<=[.!?])[ \t]+/)
+        .filter((s) => !FEE_FLEXIBILITY.test(s))
+        .join(" "),
+    )
+    .filter((p) => p.trim())
+    .join("\n\n");
+}
+
 /** A paragraph that opens the sign-off: "Looking forward...", "Best,", etc. */
 const SIGN_OFF =
   /^(looking forward|best|warm(ly|est)?|thank(s| you)|sincerely|all the best|kind regards|regards|cheers)\b/i;
 
 /**
- * Return the body unchanged if it already names the money. Otherwise insert
+ * Strip any fee-flexibility offer, then return the body as is if it already
+ * names the money. Otherwise insert
  * HONORARIUM_LINE as its own paragraph just above the sign-off. Returns null
  * when there is no sign-off to anchor on, so the caller can refuse to send
  * rather than guess where the line goes.
  */
-export function ensureHonorarium(body: string): string | null {
+export function ensureHonorarium(draft: string): string | null {
+  const body = stripFeeFlexibility(draft);
   if (HONORARIUM_MENTION.test(body)) return body;
 
   const paragraphs = body.split(/\n\s*\n/);
