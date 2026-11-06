@@ -62,6 +62,19 @@ Strong speaking themes:
 
 Good-fit venues: universities and colleges (civic engagement, political science, public policy, leadership programs), corporate and association keynotes, presidential libraries and civic lecture series, leadership and ethics forums, bipartisan/civility-focused conferences, and faith-and-public-life events.`;
 
+/**
+ * Wrap a system prompt so Anthropic caches it. Each feature's system prompt is
+ * identical across calls (per-org details live in the user prompt), so after
+ * the first call in a batch, later calls read it from cache at ~10% of the
+ * normal input price instead of paying full price every time. The cache lives
+ * ~5 minutes and refreshes on each hit, which covers a batch run. Prompts
+ * below the model's minimum cacheable size are simply not cached (no error,
+ * no extra cost).
+ */
+export function cachedSystem(text: string): Anthropic.TextBlockParam[] {
+  return [{ type: "text", text, cache_control: { type: "ephemeral" } }];
+}
+
 /** Concatenate all text blocks from a Claude message, citation markup removed. */
 export function extractText(message: Anthropic.Message): string {
   return stripCitationTags(
@@ -92,7 +105,7 @@ export async function generateText(opts: {
       model: CLAUDE_MODEL_CHEAP,
       max_tokens: opts.maxTokens ?? 2048,
       thinking: { type: "adaptive" },
-      system: opts.system,
+      system: cachedSystem(opts.system),
       messages: [{ role: "user", content: opts.userPrompt }],
     });
     addUsage(totals, message.usage);
@@ -190,7 +203,7 @@ export async function generateWithWebSearch(opts: {
           // Explicit: Opus 5.5 defaults to "medium"; research and drafting
           // are the calls worth full depth.
           output_config: { effort: "high" },
-          system: opts.system,
+          system: cachedSystem(opts.system),
           tools,
           messages,
         },

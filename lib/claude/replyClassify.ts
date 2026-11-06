@@ -1,4 +1,4 @@
-import { getAnthropic, extractText } from "@/lib/claude/client";
+import { getAnthropic, extractText, cachedSystem } from "@/lib/claude/client";
 import { extractJson } from "@/lib/claude/json";
 import { addUsage, emptyUsage, recordUsage } from "@/lib/claude/usage";
 
@@ -74,7 +74,7 @@ ${body || "(empty)"}`;
       // effort plus headroom keeps the short JSON from being truncated.
       max_tokens: 1024,
       output_config: { effort: "low" },
-      system: SYSTEM,
+      system: cachedSystem(SYSTEM),
       messages: [{ role: "user", content: userPrompt }],
     });
     addUsage(totals, message.usage);
