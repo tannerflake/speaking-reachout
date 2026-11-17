@@ -47,6 +47,35 @@ export async function updateLeadStatus(
 }
 
 /**
+ * Set or clear a Back burner lead's revisit date (YYYY-MM-DD, or null).
+ * Logged in the activity feed like other lead changes.
+ */
+export async function updateRevisitOn(
+  leadId: string,
+  revisitOn: string | null,
+): Promise<{ error?: string }> {
+  const value = revisitOn?.trim() || null;
+  if (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return { error: "Use a date like 2027-03-15." };
+  }
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("leads")
+    .update({ revisit_on: value })
+    .eq("id", leadId);
+  if (error) return { error: error.message };
+
+  await logInteraction(
+    leadId,
+    "note",
+    value ? `Revisit date set to ${value}.` : "Revisit date cleared.",
+  );
+  revalidatePath(`/admin/leads/${leadId}`);
+  revalidatePath("/admin");
+  return {};
+}
+
+/**
  * Permanently delete leads (and, via ON DELETE CASCADE, their contacts,
  * outreach, bookings, and interactions). Used to clear out junk/test data.
  * inbound_leads.crm_lead_id is set null by its FK rather than cascaded.

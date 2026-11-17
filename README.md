@@ -234,6 +234,16 @@ Apply `supabase/migrations/0020_followups.sql` before using this.
   interrupted (the function timed out). Apply
   `supabase/migrations/0027_discovery_runs.sql`; until then discovery runs
   untracked and the history panel is empty.
+- **Back burner** → a lead status for real but deferred interest ("maybe next
+  year", "no budget this cycle", "passing to the committee"). "Interested"
+  means active interest now (fee, dates, a call, a specific event). Back
+  burner behaves like Interested for automation: no follow-ups, and the
+  engagement guard treats the org as already in conversation. The reply scan
+  sends deferred replies here and prefills `leads.revisit_on` when the reply
+  gives a timeframe; the date is editable on the lead page, and the Dashboard
+  lists Back burner leads whose date has passed under "Due to revisit". Apply
+  `supabase/migrations/0029_lead_status_back_burner.sql` **before** deploying:
+  the status check constraint rejects the new value until then.
 
 ---
 

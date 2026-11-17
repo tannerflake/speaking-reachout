@@ -12,6 +12,7 @@ import {
   TypeBadge,
 } from "@/components/Badge";
 import { StatusControl } from "@/components/StatusControl";
+import { RevisitDateControl } from "@/components/RevisitDateControl";
 import { OutreachManager, type GuardView } from "@/components/OutreachManager";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -265,6 +266,13 @@ export default async function LeadDetailPage({
           <section className="rounded-lg border border-zinc-200 bg-white p-4">
             <h2 className="mb-2 text-sm font-medium text-zinc-500">Status</h2>
             <StatusControl leadId={lead.id} current={lead.status} />
+            {lead.status === "back_burner" && (
+              <RevisitDateControl
+                key={lead.revisit_on ?? ""}
+                leadId={lead.id}
+                current={lead.revisit_on ?? null}
+              />
+            )}
           </section>
 
           {/* Automated follow-ups */}

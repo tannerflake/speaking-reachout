@@ -84,6 +84,7 @@ export interface EngagementGuardResult {
 /** Lead statuses that mean a human conversation has happened. */
 export const ENGAGED_STATUSES: LeadStatus[] = [
   "interested",
+  "back_burner",
   "booked",
   "closed",
   "closed_not_me",

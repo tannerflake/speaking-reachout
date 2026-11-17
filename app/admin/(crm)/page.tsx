@@ -2,12 +2,18 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   getDueFollowupCount,
+  getDueRevisits,
   getPipelineCounts,
   getRecentInteractions,
 } from "@/lib/data";
 import { getCurrentUser } from "@/lib/auth/profile";
 import { PIPELINE_STATUSES } from "@/lib/types";
-import { statusClasses, statusLabel, formatDateTime } from "@/lib/utils";
+import {
+  statusClasses,
+  statusLabel,
+  formatDate,
+  formatDateTime,
+} from "@/lib/utils";
 import { ScanEmailButton } from "@/components/ScanEmailButton";
 import { RunFollowupsButton } from "@/components/RunFollowupsButton";
 
@@ -18,10 +24,11 @@ export default async function DashboardPage() {
   const me = await getCurrentUser();
   if (me?.role === "editor") redirect("/admin/site-editor");
 
-  const [counts, activity, dueFollowups] = await Promise.all([
+  const [counts, activity, dueFollowups, dueRevisits] = await Promise.all([
     getPipelineCounts(),
     getRecentInteractions(15),
     getDueFollowupCount(),
+    getDueRevisits(),
   ]);
 
   return (
@@ -33,7 +40,7 @@ export default async function DashboardPage() {
       {/* Pipeline summary */}
       <section>
         <h2 className="mb-2 text-sm font-medium text-zinc-500">Pipeline</h2>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {PIPELINE_STATUSES.map((s) => (
             <Link
               key={s}
@@ -62,6 +69,35 @@ export default async function DashboardPage() {
           .
         </p>
       </section>
+
+      {/* Back burner leads whose revisit date has arrived */}
+      {dueRevisits.length > 0 && (
+        <section>
+          <h2 className="mb-2 text-sm font-medium text-zinc-500">
+            Due to revisit
+          </h2>
+          <div className="rounded-lg border border-sky-200 bg-white">
+            <ul className="divide-y divide-zinc-100">
+              {dueRevisits.map((l) => (
+                <li
+                  key={l.id}
+                  className="flex items-center justify-between gap-4 px-4 py-2.5 text-sm"
+                >
+                  <Link
+                    href={`/admin/leads/${l.id}`}
+                    className="min-w-0 truncate text-blue-600 hover:underline"
+                  >
+                    {l.name}
+                  </Link>
+                  <span className="shrink-0 text-xs text-zinc-500">
+                    Revisit on {formatDate(`${l.revisit_on}T12:00:00`)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
 
       {/* Quick actions */}
       <section>

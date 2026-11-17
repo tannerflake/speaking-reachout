@@ -262,6 +262,24 @@ export async function getDueFollowupCount(): Promise<number> {
   return count ?? 0;
 }
 
+/**
+ * Back burner leads whose revisit date is today or earlier, oldest first.
+ * Returns [] (rather than throwing) until migration 0029 adds revisit_on.
+ */
+export async function getDueRevisits(): Promise<
+  Array<Pick<Lead, "id" | "name" | "revisit_on">>
+> {
+  const supabase = await createClient();
+  const today = new Date().toISOString().slice(0, 10);
+  const { data } = await supabase
+    .from("leads")
+    .select("id, name, revisit_on")
+    .eq("status", "back_burner")
+    .lte("revisit_on", today)
+    .order("revisit_on", { ascending: true });
+  return (data as Array<Pick<Lead, "id" | "name" | "revisit_on">>) ?? [];
+}
+
 export async function getActiveRules(): Promise<TailoringRule[]> {
   const supabase = await createClient();
   const { data } = await supabase

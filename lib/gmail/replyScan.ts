@@ -25,6 +25,14 @@ export interface ScanSummary {
 // inbox reply, and we must never downgrade one.
 const PROTECTED: LeadStatus[] = ["booked", "closed", "closed_not_me"];
 
+// How engaged a reply-driven status is. A later reply never moves a lead to a
+// lower rank (statuses not listed are 0, so any reply can move them).
+const ENGAGEMENT_RANK: Partial<Record<LeadStatus, number>> = {
+  interested: 2,
+  back_burner: 1,
+};
+const rank = (s: LeadStatus) => ENGAGEMENT_RANK[s] ?? 0;
+
 interface TrackedLead {
   id: string;
   name: string;
@@ -73,7 +81,7 @@ const one = <T,>(v: T | T[] | null): T | null =>
  * Rule: follow-ups are only for organizations that have NOT responded. A
  * human reply from anyone at the organization (in the original thread, in a
  * new thread from a contact we emailed, or from a colleague at the same
- * domain) marks the lead Interested / Not interested and stops follow-ups to
+ * domain) marks the lead Interested / Back burner / Not interested and stops follow-ups to
  * every contact there. Out-of-office auto-replies are logged but change
  * nothing: that person hasn't actually responded.
  *
@@ -204,11 +212,12 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
       // Out-of-office and similar: obvious from headers, no model call needed.
       let classification: ReplyClassification;
       let summary: string;
+      let revisitOn: string | null = null;
       if (isAutomatedMessage(m.from, m.subject)) {
         classification = "auto_reply";
         summary = m.subject || "Automatic reply.";
       } else {
-        ({ classification, note: summary } = await classifyReply({
+        ({ classification, note: summary, revisitOn } = await classifyReply({
           leadName: hit.leads.map((l) => l.name).join(" / "),
           from: m.from,
           subject: m.subject,
@@ -258,20 +267,38 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
         const target: LeadStatus =
           classification === "interested"
             ? "interested"
-            : classification === "cant_pay"
-              ? "cant_pay"
-              : "not_interested";
-        // One interested person keeps the lead Interested even if a colleague
-        // later declines; the decline is still in the activity log.
-        const keepInterested = l.status === "interested" && target !== "interested";
-        if (target !== l.status && !PROTECTED.includes(l.status) && !keepInterested) {
-          await admin.from("leads").update({ status: target }).eq("id", l.id);
+            : classification === "back_burner"
+              ? "back_burner"
+              : classification === "cant_pay"
+                ? "cant_pay"
+                : "not_interested";
+        // Never downgrade engagement on a later reply: one interested person
+        // keeps the lead Interested even if a colleague later defers or
+        // declines, and a Back burner lead isn't closed out by a colleague's
+        // decline. The later reply is still in the activity log.
+        const downgrade = rank(target) < rank(l.status);
+        if (target !== l.status && !PROTECTED.includes(l.status) && !downgrade) {
+          await admin
+            .from("leads")
+            .update(
+              target === "back_burner"
+                ? { status: target, revisit_on: revisitOn }
+                : { status: target },
+            )
+            .eq("id", l.id);
           await admin.from("interactions").insert({
             lead_id: l.id,
             kind: "status_change",
-            detail: `Status set to ${statusLabel(target)} (auto: reply from ${fromName}).`,
+            detail: `Status set to ${statusLabel(target)} (auto: reply from ${fromName})${
+              target === "back_burner" && revisitOn ? `; revisit on ${revisitOn}` : ""
+            }.`,
           });
           l.status = target; // later messages in this run see the new status
+          updatedLeads.add(l.id);
+        } else if (target === "back_burner" && l.status === "back_burner" && revisitOn) {
+          // A newer deferral with a timeframe moves the revisit date.
+          await admin.from("leads").update({ revisit_on: revisitOn }).eq("id", l.id);
+          await note(l.id, `Revisit date set to ${revisitOn} (auto: reply from ${fromName}).`);
           updatedLeads.add(l.id);
         }
         revalidatePath(`/admin/leads/${l.id}`);

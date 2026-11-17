@@ -11,6 +11,7 @@ export type LeadStatus =
   | "followup_2"
   | "followup_3"
   | "interested"
+  | "back_burner"
   | "booked"
   | "closed"
   | "closed_not_me"
@@ -26,6 +27,7 @@ export const LEAD_STATUSES: LeadStatus[] = [
   "followup_2",
   "followup_3",
   "interested",
+  "back_burner",
   "booked",
   "closed",
   "closed_not_me",
@@ -41,6 +43,7 @@ export const PIPELINE_STATUSES: LeadStatus[] = [
   "followup_2",
   "followup_3",
   "interested",
+  "back_burner",
   "booked",
   "closed",
 ];
@@ -89,6 +92,8 @@ export interface Lead {
   fit_rationale: string | null;
   suggested_topics: string[];
   status: LeadStatus;
+  /** Back burner leads: when to pick the conversation back up (YYYY-MM-DD). */
+  revisit_on: string | null;
   source: LeadSource;
   name_normalized: string;
   created_at: string;

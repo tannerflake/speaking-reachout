@@ -10,6 +10,7 @@ const CLASSIFY_MODEL = "claude-haiku-5-5";
 
 export type ReplyClassification =
   | "interested"
+  | "back_burner"
   | "not_interested"
   | "cant_pay"
   | "auto_reply"
@@ -19,19 +20,40 @@ export interface ClassifiedReply {
   classification: ReplyClassification;
   /** One-line, plain-English summary of the reply, for the activity log. */
   note: string;
+  /**
+   * back_burner only: best-guess date (YYYY-MM-DD) to pick the conversation
+   * back up, when the reply gives a timeframe. Null otherwise.
+   */
+  revisitOn: string | null;
 }
 
 const SYSTEM = `You classify a single email reply received in response to a cold speaking-engagement outreach sent on behalf of speaker Jeff Flake (former U.S. Senator). Decide the sender's intent and write a one-line note.
 
 Categories:
-- "interested": the sender is open or positive — wants to talk, asks for details/availability/fee/topics, forwards to a colleague, or otherwise engages constructively.
-- "cant_pay": the sender is otherwise open but cannot or will not pay an honorarium / speaking fee — no budget for speakers, can only offer travel or an unpaid slot, the fee is too high, or they ask Jeff to waive it. Use this whenever money is the stated reason the conversation ends.
-- "not_interested": the sender declines for any other reason — says no, not a fit, wrong timing, asks to be removed, or unsubscribes.
-- "auto_reply": an automated message not written by a human deciding on the pitch — out-of-office, vacation autoresponder, "I'll be back on...", receipt/ticket confirmations, or delivery/mailer-daemon notices.
-- "unrelated": the message is not a response to the outreach at all — a newsletter, event announcement, mass mailing, or an unrelated conversation. Only use this when the message arrived OUTSIDE the original outreach thread and clearly has nothing to do with the pitch.
+- "interested": clear, CURRENT interest. The sender is actively moving toward booking now: asks about the fee, dates, or availability; wants a call or meeting; says they are considering Jeff for a specific upcoming event; or forwards to a colleague who is asked to act now. Only use this when there is a concrete next step in the near term.
+- "back_burner": real but DEFERRED or soft interest. The sender is positive but nothing is happening now: "maybe next year", "we'll keep you in mind", "no budget this cycle" (while still open in future), "passing this along to the committee", "reach out again in the spring", "our calendar is full but let's revisit", "not right now, but please stay in touch". When in doubt between interested and back_burner, choose back_burner.
+- "cant_pay": the sender is otherwise open but cannot or will not pay an honorarium / speaking fee at all: no budget for speakers ever, can only offer travel or an unpaid slot, the fee is too high, or they ask Jeff to waive it. Use this when money is the stated reason the conversation ends and there is no suggestion of revisiting later.
+- "not_interested": the sender declines for any other reason: says no, not a fit, asks to be removed, or unsubscribes, with no invitation to follow up later.
+- "auto_reply": an automated message not written by a human deciding on the pitch: out-of-office, vacation autoresponder, "I'll be back on...", receipt/ticket confirmations, or delivery/mailer-daemon notices.
+- "unrelated": the message is not a response to the outreach at all: a newsletter, event announcement, mass mailing, or an unrelated conversation. Only use this when the message arrived OUTSIDE the original outreach thread and clearly has nothing to do with the pitch.
+
+Examples of "interested":
+- "Thanks for reaching out. What is Senator Flake's fee, and is he available the week of March 9?"
+- "We're planning our April leadership forum and he'd be a great fit. Can we set up a call this week?"
+- "I've looped in our events director, Sarah, who will reach out to discuss dates for our fall lecture."
+- "We'd love to have him for our Constitution Day event on September 17. Is that date open?"
+
+Examples of "back_burner":
+- "This sounds great, but our speaker lineup for this year is set. Please reach out again next fall."
+- "We don't have budget this cycle. Let's reconnect after our budget is finalized in March."
+- "I've passed this along to our programming committee; they meet quarterly and will be in touch if there's a fit."
+- "We'll keep Senator Flake in mind for future events."
+- "Interesting idea. Maybe next year? Feel free to check back in the spring."
+
+Revisit date: for "back_burner" only, if the reply names or implies a timeframe, give a best-guess date (YYYY-MM-DD) when Jeff's team should follow up, using today's date (given in the message) to resolve relative phrases. Pick a date shortly BEFORE the timeframe so there is time to plan: "next fall" -> August 15 of the coming fall; "the spring" -> February 15 of the coming spring; "after budget season in March" -> April 1; "next year" -> January 15 of next year; "in a few months" -> about 3 months from today. Always return a future date. If no timeframe is given, or the classification is not back_burner, use null.
 
 Return ONLY a JSON object (no prose, no markdown fences):
-{ "classification": "interested" | "not_interested" | "cant_pay" | "auto_reply" | "unrelated", "note": string }
+{ "classification": "interested" | "back_burner" | "not_interested" | "cant_pay" | "auto_reply" | "unrelated", "note": string, "revisit_on": string | null }
 
 The note must be a concise summary (max ~140 characters) of what the reply actually says.`;
 
@@ -57,7 +79,9 @@ export async function classifyReply(input: {
     input.inOriginalThread === false
       ? "Arrived in a SEPARATE thread from someone at the same organization (may or may not be about the pitch)."
       : "Arrived as a reply in the original outreach thread.";
-  const userPrompt = `Lead (the org/event we pitched): ${input.leadName}
+  const today = new Date().toISOString().slice(0, 10);
+  const userPrompt = `Today's date: ${today}
+Lead (the org/event we pitched): ${input.leadName}
 ${where}
 Reply from: ${input.from}
 Subject: ${input.subject}
@@ -85,10 +109,15 @@ ${body || "(empty)"}`;
       durationMs: Date.now() - started,
       ok: true,
     });
-    const parsed = extractJson<{ classification?: unknown; note?: unknown }>(
+    const parsed = extractJson<{
+      classification?: unknown;
+      note?: unknown;
+      revisit_on?: unknown;
+    }>(
       extractText(message),
     );
     const classification: ReplyClassification =
+      parsed.classification === "back_burner" ||
       parsed.classification === "not_interested" ||
       parsed.classification === "cant_pay" ||
       parsed.classification === "auto_reply" ||
@@ -99,7 +128,9 @@ ${body || "(empty)"}`;
       typeof parsed.note === "string" && parsed.note.trim()
         ? parsed.note.trim().slice(0, 200)
         : "(reply received)";
-    return { classification, note };
+    const revisitOn =
+      classification === "back_burner" ? validRevisitDate(parsed.revisit_on, today) : null;
+    return { classification, note, revisitOn };
   } catch (e) {
     void recordUsage({
       feature: "classify",
@@ -113,6 +144,17 @@ ${body || "(empty)"}`;
     return {
       classification: "interested",
       note: snippet ? `Reply: ${snippet}` : "Reply received.",
+      revisitOn: null,
     };
   }
+}
+
+/** Accept only a real YYYY-MM-DD date after today; anything else is null. */
+function validRevisitDate(value: unknown, today: string): string | null {
+  if (typeof value !== "string") return null;
+  const v = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+  const d = new Date(`${v}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== v) return null;
+  return v > today ? v : null;
 }

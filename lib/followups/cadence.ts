@@ -13,7 +13,7 @@ export const MAX_FOLLOWUPS = 3;
 
 /**
  * Lead statuses in which an automated follow-up is still appropriate. Any
- * other status (interested, booked, not_interested, junk, ...) means a human
+ * other status (interested, back_burner, booked, not_interested, junk, ...) means a human
  * or a reply has moved the lead on, and the sequence must stop.
  */
 export const FOLLOWUP_ELIGIBLE_STATUSES: LeadStatus[] = [
