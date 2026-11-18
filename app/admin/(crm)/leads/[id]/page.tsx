@@ -2,7 +2,12 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ReplyThreads } from "@/components/ReplyThreads";
-import { getLead, getLeadFollowups, getLeadInteractions } from "@/lib/data";
+import {
+  alreadyInContactReasons,
+  getLead,
+  getLeadFollowups,
+  getLeadInteractions,
+} from "@/lib/data";
 import {
   ContactStatusBadge,
   OriginBadge,
@@ -18,6 +23,8 @@ import { createClient } from "@/lib/supabase/server";
 import {
   EngagementGuardUnavailableError,
   checkEngagementGuard,
+  markLeadAlreadyInContact,
+  summarizeConflicts,
 } from "@/lib/outreach/guard";
 import { BookingForm } from "@/components/BookingForm";
 import { ReachOutAgainButton } from "@/components/ReachOutAgainButton";
@@ -47,6 +54,11 @@ async function loadGuard(leadId: string): Promise<GuardView> {
   try {
     const supabase = await createClient();
     const result = await checkEngagementGuard(supabase, leadId);
+    // A definite conflict takes the lead out of sending for good (only a
+    // "couldn't check" error, below, leaves it alone).
+    if (result.blocked) {
+      await markLeadAlreadyInContact(supabase, leadId, summarizeConflicts(result));
+    }
     return { kind: result.blocked ? "blocked" : "ok", result };
   } catch (e) {
     const error =
@@ -65,14 +77,29 @@ export default async function LeadDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+
+  // The guard runs first: it may move the lead to Already in contact, and
+  // the page should show the status and activity it just wrote.
+  const checked = await loadGuard(id);
   const lead = await getLead(id);
   if (!lead) notFound();
-
-  const [interactions, followups, guard] = await Promise.all([
+  const [interactions, followups, blockedReasons] = await Promise.all([
     getLeadInteractions(id),
     getLeadFollowups(id),
-    loadGuard(id),
+    alreadyInContactReasons(await createClient(), [id]),
   ]);
+  const blockedReason =
+    lead.status === "blocked"
+      ? (blockedReasons.get(id) ??
+        (checked.kind === "blocked" ? summarizeConflicts(checked.result) : null) ??
+        lead.outreach.find((o) => o.status === "blocked")?.error ??
+        "Flagged by the engagement guard.")
+      : null;
+  // Blocked sticks even when today's check comes back clean.
+  const guard: GuardView =
+    blockedReason && checked.kind !== "blocked"
+      ? { kind: "flagged", reason: blockedReason }
+      : checked;
   const hasRecurringBooking = lead.bookings.some((b) => b.is_recurring);
 
   // On-demand email lookup is available only when a paid provider is configured
@@ -109,6 +136,13 @@ export default async function LeadDetailPage({
             }
           />
         </div>
+        {blockedReason && (
+          <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+            <span className="font-semibold">Already in contact.</span>{" "}
+            {blockedReason} This lead is out of sending and Discover until
+            someone changes its status.
+          </p>
+        )}
         <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-zinc-500">
           <span>
             {[lead.location_region, lead.location_country]

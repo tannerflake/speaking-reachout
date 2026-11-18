@@ -152,7 +152,7 @@ interface OrgSnapshot {
  * Every row of a query, page by page. PostgREST silently stops at 1,000 rows,
  * and a guard that only sees the first 1,000 contacts fails OPEN.
  */
-async function selectAll<T>(
+export async function selectAll<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   query: () => any,
 ): Promise<T[]> {
@@ -328,23 +328,53 @@ export async function crmBlockReasons(
 }
 
 /**
- * Move leads between "new" and "blocked" to match the guard's verdict. Only
- * those two statuses are touched: a lead anywhere further along the pipeline
- * keeps its status. Best-effort: before migration 0028 the "blocked" status
- * is rejected by the database and leads simply stay "new".
+ * How every "Already in contact" activity entry starts. The lead page reads
+ * the newest one back as the reason a lead is blocked.
  */
-export async function setLeadsBlocked(
+export const ALREADY_IN_CONTACT_PREFIX = "Already in a conversation";
+
+/**
+ * The guard found a definite conflict: take the lead out of the send
+ * pipeline by setting it to "blocked" (shown as "Already in contact") and log
+ * why. Only a lead that hasn't been emailed is moved: "new", or
+ * "reached_out" with nothing actually sent. Anything further along keeps its
+ * status. Blocked is sticky; nothing moves it back automatically, only a
+ * human changing the status. Never call this for a "couldn't check the
+ * mailbox" result. Returns true when the lead was moved.
+ */
+export async function markLeadAlreadyInContact(
   db: Db,
-  leadIds: string[],
-  blocked: boolean,
+  leadId: string,
+  reason: string,
 ): Promise<boolean> {
-  if (leadIds.length === 0) return true;
-  const { error } = await db
+  const { data: lead } = await db
     .from("leads")
-    .update({ status: blocked ? "blocked" : "new" })
-    .in("id", leadIds)
-    .eq("status", blocked ? "new" : "blocked");
-  return !error;
+    .select("status")
+    .eq("id", leadId)
+    .maybeSingle();
+  const status = (lead as { status: LeadStatus } | null)?.status;
+  if (status !== "new" && status !== "reached_out") return false;
+  if (status === "reached_out") {
+    const { count } = await db
+      .from("outreach")
+      .select("id", { count: "exact", head: true })
+      .eq("lead_id", leadId)
+      .eq("status", "sent");
+    if (count === null || count > 0) return false;
+  }
+  const { data: moved, error } = await db
+    .from("leads")
+    .update({ status: "blocked" })
+    .eq("id", leadId)
+    .eq("status", status)
+    .select("id");
+  if (error || !moved || moved.length === 0) return false;
+  await db.from("interactions").insert({
+    lead_id: leadId,
+    kind: "status_change",
+    detail: `${ALREADY_IN_CONTACT_PREFIX}: ${reason} Status set to ${statusLabel("blocked")}; it stays out of sending until someone changes it.`,
+  });
+  return true;
 }
 
 /**

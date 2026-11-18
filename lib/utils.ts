@@ -105,7 +105,7 @@ export function formatDateTime(value: string | null | undefined): string {
 export function statusLabel(status: LeadStatus): string {
   return {
     new: "New",
-    blocked: "Blocked",
+    blocked: "Already in contact",
     reached_out: "Reached out",
     followup_1: "Follow-up 1",
     followup_2: "Follow-up 2",

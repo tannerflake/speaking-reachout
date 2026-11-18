@@ -7,7 +7,7 @@ import {
   EngagementGuardUnavailableError,
   checkEngagementGuard,
   newGuardBatch,
-  setLeadsBlocked,
+  markLeadAlreadyInContact,
   type GuardBatch,
   summarizeConflicts,
 } from "@/lib/outreach/guard";
@@ -47,7 +47,7 @@ async function markBlocked(
   leadId: string,
   reason: string,
 ): Promise<void> {
-  await setLeadsBlocked(db, [leadId], true);
+  await markLeadAlreadyInContact(db, leadId, reason);
   const { error } = await db
     .from("outreach")
     .update({ status: "blocked", error: reason, scheduled_for: null })
@@ -118,6 +118,18 @@ export async function sendOutreachRow(
   // on this exact row skips it.
   const overridden = Boolean(row.guard_override_at);
   if (!overridden) {
+    // Already flagged once: blocked sticks until a human changes the status,
+    // whatever today's check would say.
+    const { data: leadRow } = await db
+      .from("leads")
+      .select("status")
+      .eq("id", row.lead_id)
+      .maybeSingle();
+    if ((leadRow as { status: string } | null)?.status === "blocked") {
+      const reason = "Already in contact: this lead was flagged by the engagement guard.";
+      await markBlocked(db, outreachId, row.lead_id, reason);
+      return { error: `Blocked: ${reason}`, leadId: row.lead_id, blocked: true };
+    }
     let guard;
     try {
       guard = await checkEngagementGuard(db, row.lead_id, {
@@ -299,6 +311,18 @@ export async function queueOutreachForLeads(
   let blocked = 0;
   const ready: typeof withEmail = [];
   const verdicts = new Map<string, { blocked: boolean; reason: string }>();
+  // Leads already flagged stay out, whatever today's check says.
+  const { data: flagged } = await db
+    .from("leads")
+    .select("id")
+    .in("id", leadIds)
+    .eq("status", "blocked");
+  for (const l of (flagged ?? []) as Array<{ id: string }>) {
+    verdicts.set(l.id, {
+      blocked: true,
+      reason: "Already in contact: this lead was flagged by the engagement guard.",
+    });
+  }
   for (const r of withEmail) {
     if (r.guard_override_at) {
       ready.push(r);

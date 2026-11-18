@@ -435,7 +435,7 @@ export function LeadsView({
     const runnable = chosen.filter((r) => !skip.has(r.id));
     const parts = [
       blocked.length
-        ? `${blocked.length} blocked because the organization is already in a conversation (hover the Blocked status for why)`
+        ? `${blocked.length} blocked because the organization is already in a conversation (hover the Already in contact status for why)`
         : "",
       exhausted.length
         ? `${exhausted.length} with no email found after two contact searches`

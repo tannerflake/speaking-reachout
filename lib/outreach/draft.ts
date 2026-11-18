@@ -4,7 +4,7 @@ import { GREETING_LINE, generateOutreach } from "@/lib/claude/outreach";
 import { greetingFor, organizationDisplayName } from "@/lib/outreach/orgName";
 import {
   checkEngagementGuard,
-  setLeadsBlocked,
+  markLeadAlreadyInContact,
   summarizeConflicts,
 } from "@/lib/outreach/guard";
 import { looksLikeRealEmail } from "@/lib/utils";
@@ -27,10 +27,19 @@ export async function draftingBlocked(
   acknowledged: boolean | undefined,
 ): Promise<string | null> {
   if (acknowledged) return null;
+  const { data: lead } = await db
+    .from("leads")
+    .select("status")
+    .eq("id", leadId)
+    .maybeSingle();
+  if ((lead as { status: string } | null)?.status === "blocked") {
+    return `${BLOCKED_PREFIX} This lead is marked Already in contact. Use "Draft anyway" if this is deliberate.`;
+  }
   const guard = await checkEngagementGuard(db, leadId, { skipGmail: true });
   if (!guard.blocked) return null;
-  await setLeadsBlocked(db, [leadId], true);
-  return `${BLOCKED_PREFIX} ${summarizeConflicts(guard)} Use "Draft anyway" if this is deliberate.`;
+  const reason = summarizeConflicts(guard);
+  await markLeadAlreadyInContact(db, leadId, reason);
+  return `${BLOCKED_PREFIX} ${reason} Use "Draft anyway" if this is deliberate.`;
 }
 
 /** How a refusal from the engagement guard starts (callers match on it). */

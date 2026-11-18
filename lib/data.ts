@@ -8,7 +8,12 @@ import {
   orgDomainOfEmail,
   registrableDomain,
 } from "@/lib/utils";
-import { crmBlockReasons, setLeadsBlocked } from "@/lib/outreach/guard";
+import {
+  ALREADY_IN_CONTACT_PREFIX,
+  crmBlockReasons,
+  selectAll,
+  markLeadAlreadyInContact,
+} from "@/lib/outreach/guard";
 import { MAX_CONTACT_ROWS_PER_LEAD } from "@/lib/contacts/multiSource";
 import { draftTargets } from "@/lib/outreach/draft";
 import type { CandidateRecord, StopReason } from "@/lib/claude/discovery";
@@ -60,8 +65,9 @@ export interface LeadListRow extends Lead {
   originatedVia: OutreachChannel | null;
   /**
    * Why the engagement guard refuses this lead (the organization is already
-   * in a conversation), or null. Set from the CRM check that blocks drafting
-   * and from drafts the send-time mailbox check parked as 'blocked'. Bulk
+   * in a conversation), or null. Set from the CRM check that blocks drafting,
+   * from drafts the send-time mailbox check parked as 'blocked', and from the
+   * "Already in a conversation" activity entry on a blocked lead. Bulk
    * runs skip these instead of retrying them every day.
    */
   blockedReason: string | null;
@@ -132,7 +138,6 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
   const rows = (data as Row[]) ?? [];
   // Only leads nothing has been sent to yet can be stuck behind the guard.
   let crmBlocked = new Map<string, string>();
-  let crmChecked = false;
   try {
     crmBlocked = await crmBlockReasons(
       supabase,
@@ -140,7 +145,6 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
         .filter((r) => !(r.outreach ?? []).some((o) => o.status === "sent"))
         .map((r) => r.id),
     );
-    crmChecked = true;
   } catch {
     // Advisory only: the list still renders, and drafting/sending re-check.
   }
@@ -182,21 +186,52 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
     };
   });
 
-  // Keep the status column in step with the guard: a new lead it refuses
-  // becomes "blocked", and a blocked lead whose conflict is gone (say, a
-  // false match that was fixed) goes back to "new".
+  // A new lead the guard refuses becomes "blocked" (Already in contact), with
+  // the reason in its activity log. Blocked is sticky: nothing here moves a
+  // lead back to "new"; only a human changing the status does.
   const toBlock = listed.filter((r) => r.status === "new" && r.blockedReason);
-  // Never unblock on a failed check: an empty verdict there means "unknown".
-  const toUnblock = crmChecked
-    ? listed.filter((r) => r.status === "blocked" && !r.blockedReason)
-    : [];
-  const [blockedOk, unblockedOk] = await Promise.all([
-    setLeadsBlocked(supabase, toBlock.map((r) => r.id), true),
-    setLeadsBlocked(supabase, toUnblock.map((r) => r.id), false),
-  ]);
-  if (blockedOk) for (const r of toBlock) r.status = "blocked";
-  if (unblockedOk) for (const r of toUnblock) r.status = "new";
+  const moved = await Promise.all(
+    toBlock.map((r) =>
+      markLeadAlreadyInContact(supabase, r.id, r.blockedReason as string),
+    ),
+  );
+  toBlock.forEach((r, i) => {
+    if (moved[i]) r.status = "blocked";
+  });
+
+  // Blocked leads whose conflict lives only in the mailbox carry their reason
+  // in the activity log rather than in a CRM check or a parked draft.
+  const unexplained = listed.filter((r) => r.status === "blocked" && !r.blockedReason);
+  if (unexplained.length > 0) {
+    const reasons = await alreadyInContactReasons(
+      supabase,
+      unexplained.map((r) => r.id),
+    );
+    for (const r of unexplained) r.blockedReason = reasons.get(r.id) ?? null;
+  }
   return listed;
+}
+
+/**
+ * The newest "Already in contact" activity entry per lead: why the guard
+ * took the lead out of sending.
+ */
+export async function alreadyInContactReasons(
+  db: Db,
+  leadIds: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (leadIds.length === 0) return out;
+  const { data } = await db
+    .from("interactions")
+    .select("lead_id, detail, created_at")
+    .in("lead_id", leadIds)
+    .like("detail", `${ALREADY_IN_CONTACT_PREFIX}%`)
+    .order("created_at", { ascending: false });
+  for (const row of (data ?? []) as Array<{ lead_id: string; detail: string }>) {
+    if (!out.has(row.lead_id)) out.set(row.lead_id, row.detail);
+  }
+  return out;
 }
 
 export async function listCountries(): Promise<string[]> {
@@ -417,25 +452,35 @@ export async function getExistingLeadKeys(): Promise<{
     names.add(key);
   };
 
-  const [leads, engagements, inbound, contacts] = await Promise.all([
-    admin.from("leads").select("name, name_normalized, website"),
+  // Every lead in every status counts (blocked, junk, closed...): an org
+  // already in the CRM is never pulled again. Paged, because Supabase caps a
+  // plain select at 1,000 rows and contacts passed that; and a failed read
+  // throws rather than dedupe against a partial list.
+  const [leadRows, engagements, inbound, contactRows] = await Promise.all([
+    selectAll<{ name: string; name_normalized: string | null; website: string | null }>(
+      () => admin.from("leads").select("id, name, name_normalized, website"),
+    ),
     admin
       .from("site_content")
       .select("data")
       .eq("section_key", "engagement"),
     admin.from("inbound_leads").select("organization"),
-    admin.from("contacts").select("email"),
+    selectAll<{ email: string | null }>(() =>
+      admin.from("contacts").select("id, email"),
+    ),
   ]);
+  if (engagements.error) throw new Error(engagements.error.message);
+  if (inbound.error) throw new Error(inbound.error.message);
 
   // A contact's institutional email identifies the org as well as its
   // website does; without this, "X University" and "Lecture Series at X"
   // can both land in the CRM.
-  for (const row of contacts.data ?? []) {
+  for (const row of contactRows) {
     const d = orgDomainOfEmail((row as { email: string | null }).email);
     if (d) domains.add(d);
   }
 
-  for (const row of leads.data ?? []) {
+  for (const row of leadRows) {
     const r = row as {
       name: string;
       name_normalized: string | null;

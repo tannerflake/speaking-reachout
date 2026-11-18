@@ -30,6 +30,8 @@ interface Buf {
 export type GuardView =
   | { kind: "ok"; result: EngagementGuardResult }
   | { kind: "blocked"; result: EngagementGuardResult }
+  /** The lead was flagged earlier and stays blocked until a human changes it. */
+  | { kind: "flagged"; reason: string }
   | { kind: "unavailable"; error: string };
 
 export function OutreachManager({
@@ -380,6 +382,26 @@ export function OutreachManager({
           )}
         </div>
       )}
+      {guard.kind === "flagged" && (
+        <div className="rounded-lg border-2 border-rose-300 bg-rose-50 p-4">
+          <p className="text-sm font-semibold text-rose-800">
+            Do not send: this lead is marked Already in contact.
+          </p>
+          <p className="mt-1 text-sm text-rose-800">{guard.reason}</p>
+          <p className="mt-2 text-xs text-rose-700">
+            New drafts are off and nothing here can be sent without a recorded
+            reason. Change the status by hand if the conflict is gone.
+          </p>
+          {!acknowledged && (
+            <button
+              onClick={() => setAcknowledged(true)}
+              className="mt-3 rounded-md border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-800 hover:bg-rose-100"
+            >
+              I understand, let me draft anyway
+            </button>
+          )}
+        </div>
+      )}
       {guard.kind === "unavailable" && (
         <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="font-semibold">
@@ -515,7 +537,9 @@ export function OutreachManager({
             const needsOverride =
               editable &&
               !item.guard_override_at &&
-              (guard.kind === "blocked" || item.status === "blocked");
+              (guard.kind === "blocked" ||
+                guard.kind === "flagged" ||
+                item.status === "blocked");
 
             return (
               <div
