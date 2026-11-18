@@ -6,7 +6,9 @@ import { startSequence } from "@/lib/followups/run";
 import {
   EngagementGuardUnavailableError,
   checkEngagementGuard,
+  newGuardBatch,
   setLeadsBlocked,
+  type GuardBatch,
   summarizeConflicts,
 } from "@/lib/outreach/guard";
 import { HONORARIUM_LINE, ensureHonorarium } from "@/lib/outreach/honorarium";
@@ -61,6 +63,7 @@ async function markBlocked(
 export async function sendOutreachRow(
   db: Db,
   outreachId: string,
+  opts: { guardBatch?: GuardBatch } = {},
 ): Promise<SendRowResult> {
   const { data } = await db
     .from("outreach")
@@ -117,7 +120,10 @@ export async function sendOutreachRow(
   if (!overridden) {
     let guard;
     try {
-      guard = await checkEngagementGuard(db, row.lead_id, { contactEmail: email });
+      guard = await checkEngagementGuard(db, row.lead_id, {
+        contactEmail: email,
+        batch: opts.guardBatch,
+      });
     } catch (e) {
       if (e instanceof EngagementGuardUnavailableError) {
         await db.from("outreach").update({ error: e.message }).eq("id", outreachId);
@@ -386,6 +392,8 @@ export async function sendDueQueued(db: Db, limit = 10): Promise<DrainResult> {
   const room = Math.max(0, DAILY_SEND_CAP - (sentToday ?? 0));
 
   if (room > 0) {
+    // One mailbox search per organization for this drain.
+    const guardBatch = newGuardBatch();
     const { data } = await db
       .from("outreach")
       .select("id")
@@ -408,7 +416,7 @@ export async function sendDueQueued(db: Db, limit = 10): Promise<DrainResult> {
         .select("id");
       if (!claimed || claimed.length === 0) continue;
 
-      const res = await sendOutreachRow(db, row.id);
+      const res = await sendOutreachRow(db, row.id, { guardBatch });
       if (res.ok) sent += 1;
       else if (res.blocked) {
         blocked += 1;

@@ -16,6 +16,7 @@ import {
 } from "@/lib/outreach/send";
 import {
   checkEngagementGuard,
+  guardBatch,
   type EngagementGuardResult,
 } from "@/lib/outreach/guard";
 import { looksLikeRealEmail, pickPrimaryContact } from "@/lib/utils";
@@ -158,9 +159,13 @@ export async function regenerateDraft(
 
 export async function approveAndSend(
   outreachId: string,
+  /** Set by "Approve & send all": the org's mailbox check runs once per batch. */
+  batchId?: string,
 ): Promise<{ error?: string; ok?: boolean; blocked?: boolean }> {
   const supabase = await createClient();
-  const res = await sendOutreachRow(supabase, outreachId);
+  const res = await sendOutreachRow(supabase, outreachId, {
+    guardBatch: batchId ? guardBatch(batchId) : undefined,
+  });
   if (res.leadId) revalidatePath(`/admin/leads/${res.leadId}`);
   revalidatePath("/admin/leads");
   revalidatePath("/admin");
@@ -329,8 +334,10 @@ export async function sendAllDrafts(
   let sent = 0;
   let failed = 0;
   const errors: string[] = [];
-  for (const row of ready) {
-    const res = await approveAndSend(row.id);
+  const batchId = crypto.randomUUID();
+  for (const [i, row] of ready.entries()) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 1500));
+    const res = await approveAndSend(row.id, batchId);
     if (res.error) {
       failed += 1;
       errors.push(`${row.contact?.email}: ${res.error}`);

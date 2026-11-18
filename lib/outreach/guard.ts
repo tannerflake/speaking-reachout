@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getGmailClient } from "@/lib/gmail/send";
+import { withGmailRetry } from "@/lib/gmail/retry";
 import {
   domainFromUrl,
   normalizeName,
@@ -354,7 +355,12 @@ export async function setLeadsBlocked(
 export async function checkEngagementGuard(
   db: Db,
   leadId: string,
-  opts: { contactEmail?: string | null; skipGmail?: boolean } = {},
+  opts: {
+    contactEmail?: string | null;
+    skipGmail?: boolean;
+    /** Share mailbox results across one send batch (see guardBatch). */
+    batch?: GuardBatch;
+  } = {},
 ): Promise<EngagementGuardResult> {
   const { lead, domains, members } = await resolveOrganization(db, leadId, [
     opts.contactEmail,
@@ -406,12 +412,12 @@ export async function checkEngagementGuard(
       if (memberIds.includes(r.lead_id)) orgSubjects.add(baseSubject(r.subject));
     }
     for (const domain of domains) {
-      const found = await gmailConflictsForDomain(domain, appSends);
+      const found = await gmailConflictsForDomain(domain, appSends, opts.batch);
       conflicts.push(...found);
     }
     if (names.length > 0) {
       conflicts.push(
-        ...(await gmailConflictsForNames(names, domains, appSends, orgSubjects)),
+        ...(await gmailConflictsForNames(names, domains, appSends, orgSubjects, opts.batch)),
       );
     }
     gmailChecked = true;
@@ -463,6 +469,90 @@ const GMAIL_CACHE_TTL_MS = 2 * 60 * 1000;
 const gmailCache = new Map<string, GmailCacheEntry>();
 
 /**
+ * Mailbox verdicts shared across one send batch ("Approve & send all", a
+ * queue drain, a follow-up run), keyed by domain and by org-name search, so
+ * an org with several contacts is searched once per batch instead of once
+ * per contact. The short-lived cache above can't do this on its own: its key
+ * includes the count of app sends, which changes after every send in the
+ * batch. Mail this batch sends is the app's own and never a conflict, so a
+ * verdict taken at the start of the batch stays correct for the rest of it.
+ */
+export interface GuardBatch {
+  gmail: Map<string, EngagementConflict[]>;
+}
+
+const BATCH_TTL_MS = 10 * 60 * 1000;
+const batches = new Map<string, { at: number; batch: GuardBatch }>();
+
+export function newGuardBatch(): GuardBatch {
+  return { gmail: new Map() };
+}
+
+/**
+ * The batch for an id the client generated for one "send all" click. Each
+ * email in it is its own request, so the batch lives in this module (best
+ * effort: a request that lands on a fresh instance just searches again).
+ */
+export function guardBatch(id: string): GuardBatch {
+  const now = Date.now();
+  for (const [k, v] of batches) if (now - v.at > BATCH_TTL_MS) batches.delete(k);
+  let entry = batches.get(id);
+  if (!entry) {
+    entry = { at: now, batch: newGuardBatch() };
+    batches.set(id, entry);
+  }
+  return entry.batch;
+}
+
+/**
+ * Message headers never change for a given message id, so the metadata the
+ * guard reads is cached across checks. A domain with dozens of sent messages
+ * used to cost one messages.get per message on every check.
+ */
+interface MessageMeta {
+  from: string;
+  to: string;
+  subject: string;
+  internalDate: string | null;
+  snippet: string;
+}
+const MESSAGE_META_MAX = 5000;
+const messageMeta = new Map<string, MessageMeta>();
+
+async function getMessageMeta(
+  gmail: Awaited<ReturnType<typeof getGmailClient>>["gmail"],
+  id: string,
+): Promise<MessageMeta> {
+  const hit = messageMeta.get(id);
+  if (hit) return hit;
+  const res = await withGmailRetry(() =>
+    gmail.users.messages.get({
+      userId: "me",
+      id,
+      format: "metadata",
+      metadataHeaders: ["From", "To", "Subject"],
+      fields: "internalDate,snippet,payload/headers",
+    }),
+  );
+  const h = res.data.payload?.headers ?? [];
+  const get = (n: string) =>
+    h.find((x) => x.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
+  const meta: MessageMeta = {
+    from: get("From"),
+    to: get("To"),
+    subject: get("Subject"),
+    internalDate: res.data.internalDate ?? null,
+    snippet: res.data.snippet ?? "",
+  };
+  if (messageMeta.size >= MESSAGE_META_MAX) {
+    const oldest = messageMeta.keys().next().value;
+    if (oldest !== undefined) messageMeta.delete(oldest);
+  }
+  messageMeta.set(id, meta);
+  return meta;
+}
+
+/**
  * Search the connected mailbox for an existing conversation with a domain.
  * Two cheap list calls per domain (inbound, then outbound-not-ours), with a
  * metadata fetch only when something is found. Cached briefly so a queue
@@ -498,7 +588,11 @@ function addressesIn(header: string): string[] {
 async function gmailConflictsForDomain(
   domain: string,
   appSends: AppSends,
+  batch?: GuardBatch,
 ): Promise<EngagementConflict[]> {
+  const batchKey = `domain|${domain}`;
+  const batched = batch?.gmail.get(batchKey);
+  if (batched) return batched;
   const cacheKey = `${domain}|${appSends.threads.size}|${appSends.recipients.size}`;
   const cached = gmailCache.get(cacheKey);
   if (cached && Date.now() - cached.at < GMAIL_CACHE_TTL_MS) return cached.conflicts;
@@ -515,27 +609,13 @@ async function gmailConflictsForDomain(
   const conflicts: EngagementConflict[] = [];
   const window = `newer_than:${GMAIL_LOOKBACK_DAYS}d -in:spam -in:trash`;
 
-  const header = (
-    headers: Array<{ name?: string | null; value?: string | null }> | undefined,
-    name: string,
-  ) =>
-    headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? "";
-
   async function describe(id: string): Promise<{ from: string; to: string; subject: string; date: string }> {
-    const res = await gmail.users.messages.get({
-      userId: "me",
-      id,
-      format: "metadata",
-      metadataHeaders: ["From", "To", "Subject", "Date"],
-    });
-    const h = res.data.payload?.headers ?? undefined;
+    const m = await getMessageMeta(gmail, id);
     return {
-      from: header(h, "From"),
-      to: header(h, "To"),
-      subject: header(h, "Subject"),
-      date: res.data.internalDate
-        ? fmtDate(new Date(Number(res.data.internalDate)).toISOString())
-        : "",
+      from: m.from,
+      to: m.to,
+      subject: m.subject,
+      date: m.internalDate ? fmtDate(new Date(Number(m.internalDate)).toISOString()) : "",
     };
   }
 
@@ -543,11 +623,14 @@ async function gmailConflictsForDomain(
     // Inbound: a person at the domain wrote to us. Bounces and auto-replies
     // (out of office, "automatic reply") are not a conversation, so walk the
     // newest messages until a human one turns up.
-    const inbound = await gmail.users.messages.list({
-      userId: "me",
-      q: `from:${domain} -from:mailer-daemon -from:postmaster ${window}`,
-      maxResults: 20,
-    });
+    const inbound = await withGmailRetry(() =>
+      gmail.users.messages.list({
+        userId: "me",
+        q: `from:${domain} -from:mailer-daemon -from:postmaster ${window}`,
+        maxResults: 20,
+        fields: "messages(id,threadId)",
+      }),
+    );
     for (const msg of inbound.data.messages ?? []) {
       if (!msg.id) continue;
       const m = await describe(msg.id);
@@ -563,11 +646,14 @@ async function gmailConflictsForDomain(
 
     // Outbound: we wrote to the domain in a thread this app didn't start,
     // i.e. Jeff or Cheryl reached out by hand.
-    const outbound = await gmail.users.messages.list({
-      userId: "me",
-      q: `{to:${domain} cc:${domain}} in:sent ${window}`,
-      maxResults: 100,
-    });
+    const outbound = await withGmailRetry(() =>
+      gmail.users.messages.list({
+        userId: "me",
+        q: `{to:${domain} cc:${domain}} in:sent ${window}`,
+        maxResults: 100,
+        fields: "messages(id,threadId)",
+      }),
+    );
     const candidates = (outbound.data.messages ?? []).filter(
       (m) => m.id && m.threadId && !appSends.threads.has(m.threadId),
     );
@@ -603,6 +689,7 @@ async function gmailConflictsForDomain(
   }
 
   gmailCache.set(cacheKey, { at: Date.now(), conflicts });
+  batch?.gmail.set(batchKey, conflicts);
   return conflicts;
 }
 
@@ -621,7 +708,11 @@ async function gmailConflictsForNames(
   domains: Set<string>,
   appSends: AppSends,
   orgSubjects: Set<string>,
+  batch?: GuardBatch,
 ): Promise<EngagementConflict[]> {
+  const batchKey = `names|${names.join("|")}|${[...domains].sort().join(",")}`;
+  const batched = batch?.gmail.get(batchKey);
+  if (batched) return batched;
   const cacheKey = `names|${names.join("|")}|${appSends.threads.size}|${orgSubjects.size}`;
   const cached = gmailCache.get(cacheKey);
   if (cached && Date.now() - cached.at < GMAIL_CACHE_TTL_MS) return cached.conflicts;
@@ -642,28 +733,22 @@ async function gmailConflictsForNames(
   const conflicts: EngagementConflict[] = [];
 
   try {
-    const list = await gmail.users.messages.list({ userId: "me", q, maxResults: 25 });
+    const list = await withGmailRetry(() =>
+      gmail.users.messages.list({ userId: "me", q, maxResults: 25, fields: "messages(id,threadId)" }),
+    );
     for (const msg of list.data.messages ?? []) {
       if (!msg.id || (msg.threadId && appSends.threads.has(msg.threadId))) continue;
-      const res = await gmail.users.messages.get({
-        userId: "me",
-        id: msg.id,
-        format: "metadata",
-        metadataHeaders: ["From", "Subject"],
-      });
-      const h = res.data.payload?.headers ?? [];
-      const get = (n: string) =>
-        h.find((x) => x.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
-      const from = get("From");
-      const subject = get("Subject");
+      const meta = await getMessageMeta(gmail, msg.id);
+      const from = meta.from;
+      const subject = meta.subject;
       if (isAutomatedMessage(from, subject)) continue;
       if (orgSubjects.has(baseSubject(subject))) continue;
       const fromDomain = orgDomainOfEmail(addressesIn(from)[0]);
       if (fromDomain && domains.has(fromDomain)) continue; // reported by domain
-      const text = `${subject} ${res.data.snippet ?? ""}`.toLowerCase();
+      const text = `${subject} ${meta.snippet}`.toLowerCase();
       const named = names.find((n) => text.includes(n.toLowerCase()));
-      const date = res.data.internalDate
-        ? fmtDate(new Date(Number(res.data.internalDate)).toISOString())
+      const date = meta.internalDate
+        ? fmtDate(new Date(Number(meta.internalDate)).toISOString())
         : "";
       conflicts.push({
         kind: "gmail_mention",
@@ -684,5 +769,6 @@ async function gmailConflictsForNames(
   }
 
   gmailCache.set(cacheKey, { at: Date.now(), conflicts });
+  batch?.gmail.set(batchKey, conflicts);
   return conflicts;
 }

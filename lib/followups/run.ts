@@ -5,7 +5,9 @@ import { getThreadState } from "@/lib/gmail/thread";
 import {
   EngagementGuardUnavailableError,
   checkEngagementGuard,
+  newGuardBatch,
   summarizeConflicts,
+  type GuardBatch,
 } from "@/lib/outreach/guard";
 import { looksLikeRealEmail, statusLabel } from "@/lib/utils";
 import { scanInboxForReplies, type ScanSummary } from "@/lib/gmail/replyScan";
@@ -166,7 +168,7 @@ async function stop(
 async function processSequence(
   admin: Admin,
   seq: LoadedSequence,
-  ctx: { rules: TailoringRule[]; voiceInjection: string | null },
+  ctx: { rules: TailoringRule[]; voiceInjection: string | null; guardBatch: GuardBatch },
 ): Promise<"sent" | "stopped" | "skipped"> {
   const root = seq.outreach;
   const lead = seq.lead;
@@ -206,7 +208,10 @@ async function processSequence(
   // sibling lead, a colleague who replied to a different thread, or a thread
   // Jeff started by hand. Fails closed (error recorded, retried next run).
   try {
-    const guard = await checkEngagementGuard(admin, lead.id, { contactEmail: email });
+    const guard = await checkEngagementGuard(admin, lead.id, {
+      contactEmail: email,
+      batch: ctx.guardBatch,
+    });
     if (guard.blocked) {
       const reason = summarizeConflicts(guard);
       await stop(
@@ -399,7 +404,8 @@ export async function runDueFollowups(opts?: {
   const batch = sequences.slice(0, opts?.limit ?? 40);
   if (batch.length === 0) return summary;
 
-  const ctx = await getRulesAndVoice(admin);
+  // One mailbox search per organization for the whole run.
+  const ctx = { ...(await getRulesAndVoice(admin)), guardBatch: newGuardBatch() };
 
   for (const seq of batch) {
     summary.checked += 1;

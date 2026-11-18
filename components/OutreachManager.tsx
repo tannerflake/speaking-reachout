@@ -121,6 +121,11 @@ export function OutreachManager({
       (!guardBlocked || Boolean(o.guard_override_at)) &&
       looksLikeRealEmail(contacts.find((c) => c.id === o.contact_id)?.email),
   );
+  // After a partial "send all" the leftovers carry an error; keep the bulk
+  // button for them even if only one is left, so they aren't sent one by one.
+  const showSendAll =
+    sendable.length > 1 ||
+    sendable.some((o) => o.status === "failed" || Boolean(o.error));
 
   function sendWithOverride(item: Outreach) {
     const reason = (overrideReasons[item.id] ?? "").trim();
@@ -202,16 +207,21 @@ export function OutreachManager({
           // One request per email. A single server action that loops over every
           // draft gets killed by the hosting function time limit after a couple
           // of sends, which left the rest unsent with no error shown.
+          // Strictly one at a time with a short pause, so the mailbox checks
+          // and sends don't burst through Gmail's per-minute quota. The batch
+          // id lets the server search the org's mailbox once for all of them.
           let sent = 0;
           const errors: string[] = [];
+          const batchId = crypto.randomUUID();
           try {
-            for (const item of sendable) {
+            for (const [i, item] of sendable.entries()) {
+              if (i > 0) await new Promise((r) => setTimeout(r, 1500));
               const email =
                 contacts.find((c) => c.id === item.contact_id)?.email ?? "?";
               setMessage(
                 `Sending ${sent + errors.length + 1} of ${sendable.length}: ${email}…`,
               );
-              const res = await approveAndSend(item.id);
+              const res = await approveAndSend(item.id, batchId);
               if (res.error) errors.push(`${email}: ${res.error}`);
               else sent += 1;
             }
@@ -470,7 +480,7 @@ export function OutreachManager({
         </div>
       )}
 
-      {sendable.length > 1 && (
+      {showSendAll && (
         <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
           <span className="text-sm text-blue-900">
             {sendable.length} drafts ready, each to a different contact.

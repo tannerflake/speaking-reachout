@@ -3,6 +3,7 @@ import { createOAuthClient } from "@/lib/gmail/oauth";
 import { getGmailConnection, saveGmailTokens } from "@/lib/gmail/connection";
 import { stripCitationTags } from "@/lib/claude/sanitize";
 import type { EmailAttachment } from "@/lib/gmail/attachments";
+import { withGmailRetry } from "@/lib/gmail/retry";
 
 export class GmailNotConnectedError extends Error {
   constructor() {
@@ -55,13 +56,19 @@ export async function sendGmail(params: {
     attachments: params.attachments,
   });
 
-  const res = await gmail.users.messages.send({
-    userId: "me",
-    requestBody: {
-      raw,
-      threadId: params.thread?.threadId,
-    },
-  });
+  // Retry only rate-limit refusals: a 5xx might have delivered the message,
+  // and a second attempt would send it twice.
+  const res = await withGmailRetry(
+    () =>
+      gmail.users.messages.send({
+        userId: "me",
+        requestBody: {
+          raw,
+          threadId: params.thread?.threadId,
+        },
+      }),
+    { retryServerErrors: false },
+  );
 
   const messageId = res.data.id ?? "";
   const threadId = res.data.threadId ?? "";

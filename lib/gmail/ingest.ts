@@ -3,6 +3,7 @@ import { createOAuthClient } from "@/lib/gmail/oauth";
 import { getGmailConnection, saveGmailTokens } from "@/lib/gmail/connection";
 import { GmailNotConnectedError } from "@/lib/gmail/send";
 import { mapWithConcurrency } from "@/lib/utils";
+import { withGmailRetry } from "@/lib/gmail/retry";
 import type { IngestedMessage } from "@/lib/types";
 
 export class GmailReadScopeMissingError extends Error {
@@ -46,12 +47,14 @@ async function listIds(
   const out: Array<{ id: string }> = [];
   let pageToken: string | undefined;
   do {
-    const res = await gmail.users.messages.list({
-      userId: "me",
-      labelIds,
-      maxResults: 500,
-      pageToken,
-    });
+    const res = await withGmailRetry(() =>
+      gmail.users.messages.list({
+        userId: "me",
+        labelIds,
+        maxResults: 500,
+        pageToken,
+      }),
+    );
     for (const m of res.data.messages ?? []) {
       if (m.id) out.push({ id: m.id });
     }
@@ -142,11 +145,13 @@ async function fetchMessage(
   gmail: gmail_v1.Gmail,
   id: string,
 ): Promise<IngestedMessage | null> {
-  const res = await gmail.users.messages.get({
-    userId: "me",
-    id,
-    format: "full",
-  });
+  const res = await withGmailRetry(() =>
+    gmail.users.messages.get({
+      userId: "me",
+      id,
+      format: "full",
+    }),
+  );
   const m = res.data;
   if (!m.id) return null;
 

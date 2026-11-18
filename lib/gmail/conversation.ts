@@ -1,7 +1,13 @@
 import { getGmailClient } from "@/lib/gmail/send";
+import { withGmailRetry } from "@/lib/gmail/retry";
 import { cleanBody, extractBody } from "@/lib/gmail/ingest";
 import { looksLikeAutoReply } from "@/lib/gmail/thread";
-import { domainFromUrl, orgDomainOfEmail, registrableDomain } from "@/lib/utils";
+import {
+  domainFromUrl,
+  mapWithConcurrency,
+  orgDomainOfEmail,
+  registrableDomain,
+} from "@/lib/utils";
 import type { Contact, Outreach } from "@/lib/types";
 
 export interface ConversationMessage {
@@ -102,25 +108,35 @@ export async function getLeadConversations(lead: {
   try {
     const threadIds = new Set(outreachThreads);
     if (senders.length > 0) {
-      const list = await gmail.users.messages.list({
-        userId: "me",
-        q: `from:(${senders.join(" OR ")}) after:${gmailAfter(firstSent)} -in:spam -in:trash`,
-        maxResults: 50,
-      });
+      const list = await withGmailRetry(() =>
+        gmail.users.messages.list({
+          userId: "me",
+          q: `from:(${senders.join(" OR ")}) after:${gmailAfter(firstSent)} -in:spam -in:trash`,
+          maxResults: 50,
+          // Only thread ids are needed here.
+          fields: "messages(threadId)",
+        }),
+      );
       for (const m of list.data.messages ?? []) {
         if (m.threadId) threadIds.add(m.threadId);
       }
     }
 
-    const fetched = await Promise.all(
-      [...threadIds].slice(0, MAX_THREADS * 2).map(async (threadId) => {
+    // Bodies are shown on the page, so threads are fetched in full, but a
+    // few at a time so a lead with many threads doesn't burst the quota.
+    const fetched = await mapWithConcurrency(
+      [...threadIds].slice(0, MAX_THREADS * 2),
+      4,
+      async (threadId) => {
         try {
-          const res = await gmail.users.threads.get({ userId: "me", id: threadId, format: "full" });
+          const res = await withGmailRetry(() =>
+            gmail.users.threads.get({ userId: "me", id: threadId, format: "full" }),
+          );
           return res.data;
         } catch {
           return null; // deleted or moved out of this mailbox
         }
-      }),
+      },
     );
 
     const threads: ConversationThread[] = [];

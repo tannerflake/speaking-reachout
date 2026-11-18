@@ -1,4 +1,5 @@
 import { getGmailClient } from "@/lib/gmail/send";
+import { withGmailRetry } from "@/lib/gmail/retry";
 import { isAutomatedMessage } from "@/lib/outreach/guard";
 
 export interface ThreadMessage {
@@ -47,7 +48,7 @@ export function looksLikeAutoReply(header: (name: string) => string): boolean {
  */
 export async function getThreadState(threadId: string): Promise<ThreadState> {
   const { gmail, conn } = await getGmailClient();
-  const res = await gmail.users.threads.get({
+  const res = await withGmailRetry(() => gmail.users.threads.get({
     userId: "me",
     id: threadId,
     format: "metadata",
@@ -61,7 +62,7 @@ export async function getThreadState(threadId: string): Promise<ThreadState> {
       "X-Autorespond",
       "Precedence",
     ],
-  });
+  }));
 
   const ours = (conn.email ?? "").toLowerCase();
   const messages: ThreadMessage[] = [];
