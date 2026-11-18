@@ -2,18 +2,25 @@ import { getActiveRules, getRecentDiscoveryRuns } from "@/lib/data";
 import { describeDiscoveryRules } from "@/lib/claude/rules";
 import { DiscoverForm } from "@/components/DiscoverForm";
 import { DiscoveryHistory } from "@/components/DiscoveryHistory";
+import { DiscoverAutoRefresh } from "@/components/DiscoverAutoRefresh";
 
 export const dynamic = "force-dynamic";
-// Discovery does long web-search runs. Allow up to 5 min (effective on Vercel
-// Pro/Enterprise; Hobby caps lower — see README).
+// Server actions on this page (stop a run, re-queue leads) are quick; the
+// long work happens in /api/discover and /api/enrich.
 export const maxDuration = 300;
 
 export default async function DiscoverPage() {
-  const [rules, runs] = await Promise.all([
+  const [rules, history] = await Promise.all([
     getActiveRules(),
     getRecentDiscoveryRuns(),
   ]);
   const activeRules = describeDiscoveryRules(rules);
+  const searching = history.runs.some((r) => r.status === "running");
+  const queueLeads = history.runs.flatMap((r) => r.leads);
+  const working = queueLeads.some((l) => l.enrichStatus === "working");
+  const pendingIds = queueLeads
+    .filter((l) => l.enrichStatus === "pending")
+    .map((l) => l.id);
 
   return (
     <div className="space-y-4">
@@ -26,7 +33,11 @@ export default async function DiscoverPage() {
         </p>
       </div>
       <DiscoverForm activeRules={activeRules} />
-      <DiscoveryHistory runs={runs} />
+      <DiscoveryHistory runs={history.runs} available={history.available} />
+      <DiscoverAutoRefresh
+        active={searching || working || pendingIds.length > 0}
+        stalledLeadIds={working ? [] : pendingIds}
+      />
     </div>
   );
 }

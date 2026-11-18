@@ -4,7 +4,17 @@ import { useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { TypeBadge, ContactStatusBadge } from "@/components/Badge";
-import { enrichLead, type EnrichResult } from "@/app/actions/pipeline";
+import { CandidateLog } from "@/components/CandidateLog";
+import { stopDiscoveryRun } from "@/app/actions/pipeline";
+import { ENRICH_PARALLEL, enrichLeadViaApi } from "@/lib/enrich/client";
+import type { EnrichResult } from "@/lib/enrich/pipeline";
+import type { DiscoveryProgress } from "@/lib/claude/discovery";
+import {
+  dropLines,
+  foundLine,
+  stopReasonText,
+  type RunCounts,
+} from "@/lib/discovery/report";
 import type {
   DiscoverySummary,
   InsertedLead,
@@ -16,53 +26,50 @@ type EnrichState =
   | { phase: "done"; result: EnrichResult }
   | { phase: "error"; message: string };
 
-// How many leads get contacts + drafts at once. Each is a minute or two of
-// web-search model calls, so two in flight keeps the run moving without
-// hammering the providers.
-const ENRICH_CONCURRENCY = 2;
-
 export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
   const [count, setCount] = useState(5);
   const [focus, setFocus] = useState("");
   const [running, setRunning] = useState(false);
   const [leads, setLeads] = useState<InsertedLead[]>([]);
+  const [progress, setProgress] = useState<DiscoveryProgress | null>(null);
   const [summary, setSummary] = useState<DiscoverySummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [autoEnrich, setAutoEnrich] = useState(true);
+  // True when the server queue handles contacts + drafts (migration 0030
+  // applied). Otherwise this page drives them itself, as a fallback.
+  const [queued, setQueued] = useState(false);
+  const [runId, setRunId] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
   const [enrich, setEnrich] = useState<Record<string, EnrichState>>({});
   const [enriching, setEnriching] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  // Leads waiting for contacts + drafts, and how many workers are running.
+  // The run currently streaming, readable from event handlers.
+  const live = useRef({ queued: false, autoEnrich: true, finished: false });
+  // Fallback only: leads waiting for contacts + drafts, and how many are in
+  // flight. Deliberately NOT reset when a new run starts, so leads from the
+  // previous run are never dropped.
   const enrichQueue = useRef<string[]>([]);
   const enrichActive = useRef(0);
   const router = useRouter();
 
-  /** Pull leads off the enrich queue until it is empty. */
+  /** Pull leads off the fallback enrich queue until it is empty. */
   function pumpEnrich() {
     while (
-      enrichActive.current < ENRICH_CONCURRENCY &&
+      enrichActive.current < ENRICH_PARALLEL &&
       enrichQueue.current.length > 0
     ) {
       const id = enrichQueue.current.shift() as string;
       enrichActive.current += 1;
       setEnriching(true);
       setEnrich((prev) => ({ ...prev, [id]: { phase: "working" } }));
-      enrichLead(id)
+      enrichLeadViaApi(id)
         .then((result) => {
           setEnrich((prev) => ({
             ...prev,
             [id]: result.error
               ? { phase: "error", message: result.error }
               : { phase: "done", result },
-          }));
-        })
-        .catch((e: unknown) => {
-          setEnrich((prev) => ({
-            ...prev,
-            [id]: {
-              phase: "error",
-              message: e instanceof Error ? e.message : "Failed.",
-            },
           }));
         })
         .finally(() => {
@@ -84,11 +91,21 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
 
   async function run() {
     setRunning(true);
-    setLeads([]);
+    // Keep showing leads from an earlier run that are still being prepared.
+    setLeads((prev) =>
+      prev.filter((l) => {
+        const st = enrich[l.id];
+        return st?.phase === "waiting" || st?.phase === "working";
+      }),
+    );
+    setProgress(null);
     setSummary(null);
     setError(null);
-    setEnrich({});
-    enrichQueue.current = [];
+    setNotice(null);
+    setRunId(null);
+    setQueued(false);
+    setStopping(false);
+    live.current = { queued: false, autoEnrich, finished: false };
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -97,7 +114,7 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
       const res = await fetch("/api/discover", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ count, focus }),
+        body: JSON.stringify({ count, focus, autoEnrich }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
@@ -108,7 +125,7 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
       const decoder = new TextDecoder();
       let buffer = "";
 
-      // Read NDJSON: one JSON event per line, flushed as leads are generated.
+      // Read NDJSON: one JSON event per line, flushed as things happen.
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -124,21 +141,37 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
       }
       if (buffer.trim()) handleEvent(buffer.trim());
 
-      router.refresh();
+      if (!live.current.finished) {
+        setNotice(
+          "The live connection ended before the run reported back. The run keeps going on the server; its result appears under Recent runs.",
+        );
+      }
     } catch (e) {
-      if ((e as Error).name !== "AbortError") {
-        setError(e instanceof Error ? e.message : "Discovery failed.");
+      if ((e as Error).name === "AbortError") {
+        setNotice("Stopped watching this run.");
+      } else {
+        // The job runs server-side regardless of this connection.
+        setNotice(
+          `Lost the live connection (${
+            e instanceof Error ? e.message : "network error"
+          }). If the run had started, it keeps going on the server and appears under Recent runs.`,
+        );
       }
     } finally {
       setRunning(false);
+      setStopping(false);
       abortRef.current = null;
+      router.refresh();
     }
   }
 
   function handleEvent(line: string) {
     let evt: {
-      type: "lead" | "done" | "error";
+      type: "run" | "lead" | "progress" | "done" | "error";
+      runId?: string | null;
+      queued?: boolean;
       lead?: InsertedLead;
+      progress?: DiscoveryProgress;
       summary?: DiscoverySummary;
       error?: string;
     };
@@ -147,21 +180,61 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
     } catch {
       return; // ignore a malformed line rather than blowing up the run
     }
-    if (evt.type === "lead" && evt.lead) {
+    if (evt.type === "run") {
+      setRunId(evt.runId ?? null);
+      setQueued(Boolean(evt.queued));
+      live.current.queued = Boolean(evt.queued);
+      // Brings the new run into "Recent runs", which then keeps itself live.
+      router.refresh();
+    } else if (evt.type === "lead" && evt.lead) {
       setLeads((prev) => [...prev, evt.lead as InsertedLead]);
-      // Start finding contacts + drafting the moment the lead lands, while
-      // discovery keeps streaming the rest.
-      if (autoEnrich) scheduleEnrich(evt.lead.id);
+      // Fallback path: find contacts + draft from this page the moment the
+      // lead lands. With the server queue the server has already started.
+      if (live.current.autoEnrich && !live.current.queued) scheduleEnrich(evt.lead.id);
+    } else if (evt.type === "progress" && evt.progress) {
+      setProgress(evt.progress);
     } else if (evt.type === "done" && evt.summary) {
+      live.current.finished = true;
       setSummary(evt.summary);
     } else if (evt.type === "error") {
+      live.current.finished = true;
       setError(evt.error ?? "Discovery failed.");
     }
   }
 
-  function stop() {
-    abortRef.current?.abort();
+  async function stop() {
+    // A recorded run is stopped on the server (it finishes the searches in
+    // flight and reports back). An unrecorded one can only be un-watched.
+    if (runId) {
+      setStopping(true);
+      const res = await stopDiscoveryRun(runId);
+      if (res.error) {
+        setStopping(false);
+        setError(`Could not stop the run: ${res.error}`);
+      }
+    } else {
+      abortRef.current?.abort();
+    }
   }
+
+  const counts: RunCounts | null = summary
+    ? {
+        requested: summary.requested,
+        added: summary.inserted,
+        rawCount: summary.rawCount,
+        duplicates: summary.duplicates,
+        repeats: summary.repeats,
+        ruleFiltered: summary.ruleFiltered,
+        surplus: summary.surplus,
+        saveFailed: summary.saveFailed,
+        failedBatches: summary.failedBatches,
+        rounds: summary.rounds,
+        searches: summary.searches,
+      }
+    : null;
+  // The run that just streamed, for the list below. Leads carried over from
+  // an earlier run stay listed until their contacts + drafts finish.
+  const showLiveList = leads.length > 0 && !queued;
 
   return (
     <div className="space-y-4">
@@ -217,6 +290,12 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
             </span>
           </span>
         </label>
+        <p className="mt-2 text-xs text-zinc-400">
+          Discover keeps searching different sectors and regions until it has
+          the number of new leads you asked for, or about four minutes pass.
+          It runs on the server, so you can leave this page; progress shows
+          under Recent runs.
+        </p>
 
         <div className="mt-4 flex items-center gap-3">
           <button
@@ -230,12 +309,15 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
             <>
               <button
                 onClick={stop}
-                className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50"
+                disabled={stopping}
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-60"
               >
-                Stop
+                {stopping ? "Stopping…" : "Stop"}
               </button>
               <span className="text-sm text-zinc-500">
-                Researching real venues — {leads.length} of {count} found so far…
+                {progress
+                  ? `Round ${progress.rounds}: ${progress.added} of ${count} added. ${progress.rawCount} candidates so far, ${progress.duplicates + progress.repeats} duplicates, ${progress.ruleFiltered} removed by rules.`
+                  : `Researching real venues: 0 of ${count} added so far…`}
               </span>
             </>
           )}
@@ -243,7 +325,7 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
       </div>
 
       {/* Live results — leads appear here as they're generated */}
-      {leads.length > 0 && (
+      {showLiveList && (
         <div className="rounded-lg border border-zinc-200 bg-white p-4">
           <h3 className="text-sm font-medium text-zinc-700">
             New leads {running && "(streaming in…)"}
@@ -320,34 +402,69 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
         </div>
       )}
 
-      {/* Final summary */}
-      {summary && !summary.error && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-          <div className="text-sm text-zinc-800">
+      {notice && !error && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm text-amber-800">{notice}</p>
+        </div>
+      )}
+
+      {/* Final summary: what was asked, what happened to every candidate */}
+      {summary && counts && (
+        <div
+          className={`rounded-lg border p-4 ${
+            summary.inserted >= summary.requested
+              ? "border-emerald-200 bg-emerald-50"
+              : "border-amber-200 bg-amber-50"
+          }`}
+        >
+          <div className="space-y-1 text-sm text-zinc-800">
             <p className="font-medium">
-              Added {summary.inserted} new lead
+              Requested {summary.requested}, added {summary.inserted} new lead
               {summary.inserted === 1 ? "" : "s"}.
             </p>
-            {autoEnrich ? (
-              <p className="mt-1 text-zinc-600">
-                {enriching
-                  ? "Finding contacts and drafting outreach…"
-                  : `${enrichTotals(enrich).drafts} draft${
-                      enrichTotals(enrich).drafts === 1 ? "" : "s"
-                    } ready across ${enrichTotals(enrich).withEmail} contacts with email.`}
-                {summary.failedBatches > 0 &&
-                  ` ${summary.failedBatches} batch(es) failed and were skipped.`}
-              </p>
-            ) : (
-              <p className="mt-1 text-zinc-600">
-                {summary.needsLookup} need a manual email lookup.
-                {summary.failedBatches > 0 &&
-                  ` ${summary.failedBatches} batch(es) failed and were skipped.`}
+            <p className="text-zinc-700">
+              {stopReasonText(summary.stopReason, summary.requested, summary.inserted)}
+            </p>
+            <p className="text-zinc-600">{foundLine(counts)}</p>
+            {dropLines(counts).length > 0 && (
+              <ul className="list-disc pl-5 text-zinc-600">
+                {dropLines(counts).map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            )}
+            {summary.errors.length > 0 && (
+              <p className="text-rose-700">Search errors: {summary.errors.join("; ")}.</p>
+            )}
+            {!summary.runId && (
+              <p className="text-zinc-600">
+                This run was not saved to Recent runs (database migration 0030
+                is not applied yet).
               </p>
             )}
+            {summary.inserted > 0 &&
+              (!autoEnrich ? (
+                <p className="text-zinc-600">
+                  {summary.needsLookup} need a manual email lookup.
+                </p>
+              ) : queued ? (
+                <p className="text-zinc-600">
+                  Contacts and drafts are being prepared on the server; watch
+                  them finish under Recent runs. You can leave this page.
+                </p>
+              ) : (
+                <p className="text-zinc-600">
+                  {enriching
+                    ? "Finding contacts and drafting outreach. Keep this page open until it finishes."
+                    : `${enrichTotals(enrich).drafts} draft${
+                        enrichTotals(enrich).drafts === 1 ? "" : "s"
+                      } ready across ${enrichTotals(enrich).withEmail} contacts with email.`}
+                </p>
+              ))}
+            <CandidateLog candidates={summary.candidates} />
             <Link
               href="/admin/leads?status=drafted"
-              className="mt-2 inline-block text-blue-600 hover:underline"
+              className="mt-1 inline-block text-blue-600 hover:underline"
             >
               {autoEnrich ? "Review and send →" : "View new leads →"}
             </Link>

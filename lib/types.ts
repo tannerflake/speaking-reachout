@@ -98,7 +98,16 @@ export interface Lead {
   name_normalized: string;
   created_at: string;
   updated_at: string;
+  /**
+   * Contact finding + drafting queue state (migration 0030; absent before it
+   * is applied). null = never queued.
+   */
+  enrich_status?: EnrichStatus | null;
+  enrich_started_at?: string | null;
+  enrich_error?: string | null;
 }
+
+export type EnrichStatus = "pending" | "working" | "done" | "error";
 
 export interface Contact {
   id: string;

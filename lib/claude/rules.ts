@@ -155,6 +155,17 @@ export function filterDiscoveredLeads(
   candidates: DiscoveredLead[],
   rules: TailoringRule[],
 ): DiscoveredLead[] {
+  const reject = discoveryRejecter(rules);
+  return candidates.filter((c) => reject(c) === null);
+}
+
+/**
+ * Same checks as filterDiscoveredLeads, but says WHY a candidate is dropped
+ * (null = keep), so a Discover run can report what the rules removed.
+ */
+export function discoveryRejecter(
+  rules: TailoringRule[],
+): (c: DiscoveredLead) => string | null {
   const filters = discoveryFilters(rules);
   const exclude = new Set(
     filters
@@ -171,14 +182,34 @@ export function filterDiscoveredLeads(
     .map((k) => k.toLowerCase().trim())
     .filter(Boolean);
 
-  return candidates.filter((c) => {
+  return (c) => {
     const country = (c.location_country ?? "").toLowerCase().trim();
-    if (exclude.size && country && exclude.has(country)) return false;
-    if (include.size && (!country || !include.has(country))) return false;
+    if (exclude.size && country && exclude.has(country))
+      return `rule excludes leads in ${c.location_country}`;
+    if (include.size && (!country || !include.has(country)))
+      return `rule only allows other countries (this one: ${c.location_country || "unknown"})`;
     if (keywords.length) {
       const hay = `${c.name} ${c.description}`.toLowerCase();
-      if (keywords.some((k) => hay.includes(k))) return false;
+      const hit = keywords.find((k) => hay.includes(k));
+      if (hit) return `rule excludes anything mentioning "${hit}"`;
     }
-    return true;
-  });
+    return null;
+  };
+}
+
+/**
+ * Everything the active rules steer discovery away from (excluded keywords
+ * and countries, deprioritized venue types), lowercased. Discovery uses it to
+ * skip search angles that could only produce candidates the rules would drop.
+ */
+export function discoveryAvoidTerms(rules: TailoringRule[]): string[] {
+  const filters = discoveryFilters(rules);
+  const targets = targetingValues(rules);
+  return [
+    ...filters.flatMap((f) => f.exclude_keywords ?? []),
+    ...filters.flatMap((f) => f.exclude_countries ?? []),
+    ...targets.flatMap((t) => t.deprioritize_types ?? []),
+  ]
+    .map((t) => t.toLowerCase().replace(/_/g, " ").trim())
+    .filter(Boolean);
 }

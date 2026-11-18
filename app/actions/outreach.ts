@@ -3,8 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveRules, getActiveVoiceInjection, getLead } from "@/lib/data";
-import { GREETING_LINE, generateOutreach } from "@/lib/claude/outreach";
-import { greetingFor, organizationDisplayName } from "@/lib/outreach/orgName";
+import { generateOutreach } from "@/lib/claude/outreach";
+import { draftAllForLead, draftingBlocked } from "@/lib/outreach/draft";
 import {
   getQueueStatus,
   queueOutreachForLeads,
@@ -16,30 +16,10 @@ import {
 } from "@/lib/outreach/send";
 import {
   checkEngagementGuard,
-  setLeadsBlocked,
-  summarizeConflicts,
   type EngagementGuardResult,
 } from "@/lib/outreach/guard";
 import { looksLikeRealEmail, pickPrimaryContact } from "@/lib/utils";
 import type { Contact, Outreach } from "@/lib/types";
-
-/**
- * Drafting preflight: CRM-level engagement check (no mailbox call) so we
- * don't spend a researched generation on an org we must not email. The
- * operator can acknowledge the conflict to draft anyway; sending still
- * requires a recorded override on the row.
- */
-async function draftingBlocked(
-  leadId: string,
-  acknowledged: boolean | undefined,
-): Promise<string | null> {
-  if (acknowledged) return null;
-  const supabase = await createClient();
-  const guard = await checkEngagementGuard(supabase, leadId, { skipGmail: true });
-  if (!guard.blocked) return null;
-  await setLeadsBlocked(supabase, [leadId], true);
-  return `Not drafted. ${summarizeConflicts(guard)} Use "Draft anyway" if this is deliberate.`;
-}
 
 export interface DraftResult {
   id?: string;
@@ -55,7 +35,11 @@ export async function generateDraft(
 ): Promise<DraftResult> {
   const lead = await getLead(leadId);
   if (!lead) return { error: "Lead not found." };
-  const blockedReason = await draftingBlocked(leadId, opts?.acknowledgeConflict);
+  const blockedReason = await draftingBlocked(
+    await createClient(),
+    leadId,
+    opts?.acknowledgeConflict,
+  );
   if (blockedReason) return { error: blockedReason };
   const [rules, voiceInjection] = await Promise.all([
     getActiveRules(),
@@ -308,97 +292,19 @@ export async function bulkDraft(
   return { created, failed };
 }
 
-const NAME_TOKEN = "[NAME]";
-
-/**
- * Swap the shared greeting placeholder for one contact: "Dear Susan Krys,",
- * or for a shared inbox with no name, "Dear <organization> team,".
- */
-function personalize(body: string, contact: Contact, leadName: string): string {
-  const name = contact.name?.trim();
-  if (!body.includes(NAME_TOKEN)) return body;
-  const greeted = body.replace(
-    new RegExp(`^\\s*Dear ${NAME_TOKEN.replace(/[[\]]/g, "\\$&")},[^\\n]*`),
-    greetingFor(name, leadName),
-  );
-  return greeted
-    .split(NAME_TOKEN)
-    .join(name || organizationDisplayName(leadName) || "your team");
-}
-
 /**
  * Draft outreach for every contact on a lead that has an email and hasn't been
- * emailed or drafted yet. Runs ONE researched generation (written to be sent
- * individually to several people at the same org), then saves a personalized
- * copy per contact so each can be reviewed and edited before sending.
+ * emailed or drafted yet (see lib/outreach/draft.ts).
  */
 export async function draftForAllContacts(
   leadId: string,
   oneOff?: string,
   opts?: { acknowledgeConflict?: boolean },
 ): Promise<{ created: number; error?: string; styleAdjusted?: boolean }> {
-  const lead = await getLead(leadId);
-  if (!lead) return { created: 0, error: "Lead not found." };
-  const blockedReason = await draftingBlocked(leadId, opts?.acknowledgeConflict);
-  if (blockedReason) return { created: 0, error: blockedReason };
-
-  const covered = new Set(
-    lead.outreach.map((o) => o.contact_id).filter(Boolean) as string[],
-  );
-  const targets = lead.contacts.filter(
-    (c) => looksLikeRealEmail(c.email) && !covered.has(c.id),
-  );
-  if (targets.length === 0) {
-    return {
-      created: 0,
-      error: "Every contact with an email already has a draft or a sent email.",
-    };
-  }
-
-  const [rules, voiceInjection] = await Promise.all([
-    getActiveRules(),
-    getActiveVoiceInjection(),
-  ]);
-
-  const multiInstruction = `This same email will be sent individually to ${targets.length} different people at this organization (roles include: ${targets
-    .map((c) => c.role ?? "staff")
-    .slice(0, 7)
-    .join("; ")}). Keep it about the institution and its programs rather than any one person's job, so it reads naturally for each recipient. Open with exactly "Dear ${NAME_TOKEN}," on the first line; that placeholder is replaced with each recipient's name.`;
-
-  try {
-    const gen = await generateOutreach({
-      lead,
-      contact: null,
-      rules,
-      oneOffInstruction: oneOff ? `${multiInstruction}\n${oneOff}` : multiInstruction,
-      voiceInjection,
-    });
-
-    // Guarantee the placeholder greeting even if the model ignored it.
-    const body = gen.body.includes(NAME_TOKEN)
-      ? gen.body
-      : gen.body.replace(GREETING_LINE, `Dear ${NAME_TOKEN},\n`);
-
-    const supabase = await createClient();
-    const { error } = await supabase.from("outreach").insert(
-      targets.map((c) => ({
-        lead_id: leadId,
-        contact_id: c.id,
-        subject: gen.subject,
-        body: personalize(body, c, lead.name),
-        status: "draft",
-      })),
-    );
-    if (error) return { created: 0, error: error.message };
-
-    revalidatePath(`/admin/leads/${leadId}`);
-    return { created: targets.length, styleAdjusted: gen.styleAdjusted };
-  } catch (e) {
-    return {
-      created: 0,
-      error: e instanceof Error ? e.message : "Failed to draft outreach.",
-    };
-  }
+  const supabase = await createClient();
+  const res = await draftAllForLead(supabase, leadId, oneOff, opts);
+  if (res.created > 0) revalidatePath(`/admin/leads/${leadId}`);
+  return res;
 }
 
 /**

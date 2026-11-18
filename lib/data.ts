@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -9,10 +10,13 @@ import {
 } from "@/lib/utils";
 import { crmBlockReasons, setLeadsBlocked } from "@/lib/outreach/guard";
 import { MAX_CONTACT_ROWS_PER_LEAD } from "@/lib/contacts/multiSource";
+import { draftTargets } from "@/lib/outreach/draft";
+import type { CandidateRecord, StopReason } from "@/lib/claude/discovery";
 import type {
   Booking,
   Contact,
   EmailInsight,
+  EnrichStatus,
   FollowupSequence,
   Interaction,
   Lead,
@@ -25,6 +29,11 @@ import type {
   VoiceProfile,
 } from "@/lib/types";
 import { LEAD_STATUSES, PIPELINE_STATUSES } from "@/lib/types";
+
+// Readers that also run in background jobs (no operator cookies) accept an
+// explicit client; without one they use the request's cookie-bound client.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Db = SupabaseClient<any, any, any>;
 
 export interface LeadListRow extends Lead {
   contactsCount: number;
@@ -146,16 +155,20 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
       ? new Date(Math.max(...activityTimes)).toISOString()
       : row.updated_at;
     const contacts = row.contacts ?? [];
-    const emailable = contacts.filter((c) => looksLikeRealEmail(c.email));
-    const covered = new Set(
-      (row.outreach ?? []).map((o) => o.contact_id).filter(Boolean) as string[],
+    // Counted per email address, the way drafting works: two contact rows
+    // sharing an inbox need one draft, not two.
+    const emailable = new Set(
+      contacts
+        .filter((c) => looksLikeRealEmail(c.email))
+        .map((c) => (c.email as string).trim().toLowerCase()),
     );
+    const undrafted = draftTargets(contacts, row.outreach ?? []).length;
     return {
       ...row,
       contactsCount: contacts.length,
-      hasContactEmail: emailable.length > 0,
-      emailableContacts: emailable.length,
-      draftedContacts: emailable.filter((c) => covered.has(c.id)).length,
+      hasContactEmail: emailable.size > 0,
+      emailableContacts: emailable.size,
+      draftedContacts: Math.max(0, emailable.size - undrafted),
       lastActivity: last,
       hasUnsentDraft: (row.outreach ?? []).some((o) => o.status === "draft"),
       queuedCount: (row.outreach ?? []).filter((o) => o.status === "queued").length,
@@ -165,7 +178,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
         (row.outreach ?? []).find((o) => o.status === "blocked")?.error ??
         null,
       contactSearchExhausted:
-        emailable.length === 0 && contacts.length >= MAX_CONTACT_ROWS_PER_LEAD,
+        emailable.size === 0 && contacts.length >= MAX_CONTACT_ROWS_PER_LEAD,
     };
   });
 
@@ -200,8 +213,11 @@ export async function listCountries(): Promise<string[]> {
   return Array.from(set).sort();
 }
 
-export async function getLead(id: string): Promise<LeadWithRelations | null> {
-  const supabase = await createClient();
+export async function getLead(
+  id: string,
+  db?: Db,
+): Promise<LeadWithRelations | null> {
+  const supabase = db ?? (await createClient());
   const { data } = await supabase
     .from("leads")
     .select("*, contacts(*), outreach(*), bookings(*)")
@@ -280,8 +296,8 @@ export async function getDueRevisits(): Promise<
   return (data as Array<Pick<Lead, "id" | "name" | "revisit_on">>) ?? [];
 }
 
-export async function getActiveRules(): Promise<TailoringRule[]> {
-  const supabase = await createClient();
+export async function getActiveRules(db?: Db): Promise<TailoringRule[]> {
+  const supabase = db ?? (await createClient());
   const { data } = await supabase
     .from("tailoring_rules")
     .select("*")
@@ -301,8 +317,8 @@ export async function getAllRules(): Promise<TailoringRule[]> {
 
 // ---- Voice & Insights ------------------------------------------------------
 
-export async function getActiveVoiceProfile(): Promise<VoiceProfile | null> {
-  const supabase = await createClient();
+export async function getActiveVoiceProfile(db?: Db): Promise<VoiceProfile | null> {
+  const supabase = db ?? (await createClient());
   const { data } = await supabase
     .from("voice_profile")
     .select("*")
@@ -326,8 +342,8 @@ export async function getVoiceInsights(
 }
 
 /** The active learned voice block injected into outreach generation. */
-export async function getActiveVoiceInjection(): Promise<string | null> {
-  const profile = await getActiveVoiceProfile();
+export async function getActiveVoiceInjection(db?: Db): Promise<string | null> {
+  const profile = await getActiveVoiceProfile(db);
   return profile?.prompt_injection ?? null;
 }
 
@@ -458,6 +474,9 @@ export interface DiscoveryRunLead {
   emailableContacts: number;
   draftedContacts: number;
   hasUnsentDraft: boolean;
+  /** Contact finding + drafting queue state (null = never queued). */
+  enrichStatus: EnrichStatus | null;
+  enrichError: string | null;
 }
 
 export interface DiscoveryRun {
@@ -471,8 +490,24 @@ export interface DiscoveryRun {
   inserted: number;
   raw_count: number | null;
   failed_batches: number | null;
+  duplicates: number | null;
+  repeats: number | null;
+  rule_filtered: number | null;
+  surplus: number | null;
+  rounds: number | null;
+  searches: number | null;
+  stop_reason: StopReason | null;
+  candidates: CandidateRecord[] | null;
+  auto_enrich: boolean;
+  cancel_requested: boolean;
   error: string | null;
   leads: DiscoveryRunLead[];
+}
+
+export interface DiscoveryHistoryData {
+  /** False until migration 0030 is applied: runs are not being recorded. */
+  available: boolean;
+  runs: DiscoveryRun[];
 }
 
 // Discovery is capped at 300s (maxDuration); a run still "running" well past
@@ -481,22 +516,22 @@ const RUN_STALE_MS = 6 * 60 * 1000;
 
 /**
  * Discover runs from the last `hours`, newest first, each with the leads it
- * inserted and their contact/draft coverage. Empty when migration 0027 is not
- * applied yet.
+ * inserted and their contact/draft coverage. `available` is false when the
+ * tracking tables are missing (migration 0030 not applied).
  */
 export async function getRecentDiscoveryRuns(
   hours = 24,
-): Promise<DiscoveryRun[]> {
+): Promise<DiscoveryHistoryData> {
   const admin = createAdminClient();
   const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
   const { data, error } = await admin
     .from("discovery_runs")
     .select(
-      "*, leads(id, name, type, status, location_country, location_region, created_at, contacts(id, email), outreach(status, contact_id))",
+      "*, leads(id, name, type, status, location_country, location_region, created_at, enrich_status, enrich_error, contacts(id, email), outreach(status, contact_id))",
     )
     .gte("created_at", since)
     .order("created_at", { ascending: false });
-  if (error || !data) return [];
+  if (error || !data) return { available: false, runs: [] };
 
   type Row = Omit<DiscoveryRun, "leads" | "status"> & {
     status: "running" | "done" | "error";
@@ -506,12 +541,14 @@ export async function getRecentDiscoveryRuns(
         "id" | "name" | "type" | "status" | "location_country" | "location_region"
       > & {
         created_at: string;
+        enrich_status: EnrichStatus | null;
+        enrich_error: string | null;
         contacts: { id: string; email: string | null }[];
         outreach: { status: string; contact_id: string | null }[];
       }
     >;
   };
-  return (data as Row[]).map((run) => {
+  const runs = (data as Row[]).map((run) => {
     const stale =
       run.status === "running" &&
       Date.now() - new Date(run.created_at).getTime() > RUN_STALE_MS;
@@ -519,10 +556,15 @@ export async function getRecentDiscoveryRuns(
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map((l) => {
         const contacts = l.contacts ?? [];
-        const emailable = contacts.filter((c) => looksLikeRealEmail(c.email));
-        const covered = new Set(
-          (l.outreach ?? []).map((o) => o.contact_id).filter(Boolean) as string[],
+        const outreach = l.outreach ?? [];
+        // One per email address, the way drafting counts them: two contact
+        // rows sharing an inbox need one draft, not two.
+        const emails = new Set(
+          contacts
+            .filter((c) => looksLikeRealEmail(c.email))
+            .map((c) => (c.email as string).trim().toLowerCase()),
         );
+        const missing = draftTargets(contacts, outreach).length;
         return {
           id: l.id,
           name: l.name,
@@ -531,18 +573,21 @@ export async function getRecentDiscoveryRuns(
           location_country: l.location_country,
           location_region: l.location_region,
           contactsCount: contacts.length,
-          emailableContacts: emailable.length,
-          draftedContacts: emailable.filter((c) => covered.has(c.id)).length,
-          hasUnsentDraft: (l.outreach ?? []).some((o) => o.status === "draft"),
+          emailableContacts: emails.size,
+          draftedContacts: Math.max(0, emails.size - missing),
+          hasUnsentDraft: outreach.some((o) => o.status === "draft"),
+          enrichStatus: l.enrich_status,
+          enrichError: l.enrich_error,
         };
       });
     return {
       ...run,
-      status: stale ? "interrupted" : run.status,
+      status: stale ? ("interrupted" as const) : run.status,
       // The counter is updated per lead, but count the tagged leads too in
       // case a progress write was missed.
       inserted: Math.max(run.inserted, leads.length),
       leads,
     };
   });
+  return { available: true, runs };
 }

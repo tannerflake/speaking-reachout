@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getEnv } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendDueQueued } from "@/lib/outreach/send";
+import { kickContext, kickEnrichWorkers } from "@/lib/enrich/queue";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -27,6 +28,11 @@ export async function GET(request: NextRequest) {
 
   // Up to 30 per run: at the 1.5s inter-send pause that is well inside the
   // function limit, and the per-email schedule still governs pacing.
-  const summary = await sendDueQueued(createAdminClient(), 30);
-  return NextResponse.json({ ok: true, ...summary });
+  const admin = createAdminClient();
+  const summary = await sendDueQueued(admin, 30);
+  // Safety net for the contacts + drafts queue: restart workers for any
+  // leads left waiting (normally workers chain themselves, see
+  // lib/enrich/queue.ts).
+  const enrichWorkers = await kickEnrichWorkers(admin, kickContext(request.headers));
+  return NextResponse.json({ ok: true, ...summary, enrichWorkers });
 }

@@ -85,6 +85,30 @@ export async function sendOutreachRow(
     };
   }
 
+  // One first email per inbox per lead. Two contact rows can carry the same
+  // address (the same person found under two names), each with its own
+  // draft; once one has gone out, the twin is refused instead of sent.
+  if ((row.sequence_step ?? 0) === 0 && row.contact) {
+    const { data: twins } = await db
+      .from("outreach")
+      .select("id, sequence_step, contact:contacts!inner(id, email)")
+      .eq("lead_id", row.lead_id)
+      .eq("status", "sent")
+      .neq("contact_id", row.contact.id)
+      .ilike("contact.email", (email as string).trim());
+    const alreadySent = ((twins as Array<{ sequence_step: number | null }> | null) ?? []).some(
+      (t) => (t.sequence_step ?? 0) === 0,
+    );
+    if (alreadySent) {
+      const message = `Not sent: ${email} was already emailed for this lead through a duplicate contact entry. Delete this duplicate draft.`;
+      await db
+        .from("outreach")
+        .update({ status: "failed", error: message, scheduled_for: null })
+        .eq("id", outreachId);
+      return { error: message, leadId: row.lead_id };
+    }
+  }
+
   // ENGAGEMENT GUARD. Never email an organization we are already talking to,
   // whichever lead row the conversation lives on and even if it lives only in
   // the mailbox. Fails closed. Only an explicit, recorded operator override

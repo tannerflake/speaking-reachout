@@ -529,8 +529,20 @@ export async function findContactsMultiSource(
       roleRank(b.role) - roleRank(a.role),
   );
 
+  // One row per email address. Two "people" sharing an address are the same
+  // inbox (typically a real name from an LLM plus a name Hunter derived from
+  // the address); the better-ranked one, sorted first, is kept.
+  const seenEmails = new Set<string>();
+  const unique = found.filter((f) => {
+    if (!f.email) return true;
+    const key = f.email.toLowerCase();
+    if (seenEmails.has(key)) return false;
+    seenEmails.add(key);
+    return true;
+  });
+
   return {
-    contacts: found.slice(0, input.max),
+    contacts: unique.slice(0, input.max),
     succeeded,
     failed,
     hunterUsed,

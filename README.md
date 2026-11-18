@@ -292,11 +292,24 @@ guard still refuses to send; it just records the refusal as `failed` with a
 4. (Optional) set `NEXT_PUBLIC_APP_URL` to your production URL.
 5. Set `CRON_SECRET` (any long random string) so the follow-up cron can run.
 
-**Function duration:** Discovery and outreach make long web-search calls. The
-`/discover` and `/leads/[id]` routes declare `maxDuration = 300`. This is honored
-on Vercel **Pro/Enterprise**; on the **Hobby** plan functions are capped (~60s),
-so on Hobby request smaller discovery batches (e.g. 10–20) to stay within the
-limit. Locally there is no such cap.
+**Function duration:** Discovery and outreach make long web-search calls, so
+`/api/discover`, `/api/enrich` and the lead pages declare `maxDuration = 300`
+(the most every Vercel plan allows with Fluid compute). Work is sized to fit:
+
+- A **Discover run** searches in rounds (different sectors, regions and event
+  formats each time, with every known organization excluded in the prompt)
+  until it has the requested number of new leads, and stops itself after
+  about 4 minutes, 8 rounds, or 3 rounds that add nothing. It runs under
+  `after()`, so it continues if the tab is closed, and records what happened
+  (candidates found, duplicates, rule drops, stop reason) in `discovery_runs`.
+- **Contacts + drafts** run as a server-side queue (`lib/enrich/queue.ts`):
+  each `/api/enrich` worker invocation handles one lead inside its own 300s
+  and then starts a successor, five leads at a time. Self-calls authenticate
+  with `CRON_SECRET` (falling back to the operator's session cookie).
+
+Both need `supabase/migrations/0030_discovery_tracking.sql`. Without it
+Discover still works, but runs are not recorded and contacts + drafts are
+driven by the open Discover page instead of the server queue.
 
 ---
 

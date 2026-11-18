@@ -150,6 +150,8 @@ export async function generateWithWebSearch(opts: {
    * hanging forever. Defaults to 4 minutes.
    */
   timeoutMs?: number;
+  /** Caller-side cancel (e.g. a Discover run that already hit its target). */
+  signal?: AbortSignal;
   /** Use the lower-cost model (faster; fine for lookup-style research). */
   cheap?: boolean;
   /** What this call is for; attributed in the api_usage table. */
@@ -189,7 +191,8 @@ export async function generateWithWebSearch(opts: {
 
   // Single deadline shared across pause_turn resumes — a stuck call can never
   // exceed this, so Discover always terminates rather than loading forever.
-  const signal = AbortSignal.timeout(opts.timeoutMs ?? 240_000);
+  const deadline = AbortSignal.timeout(opts.timeoutMs ?? 240_000);
+  const signal = opts.signal ? AbortSignal.any([deadline, opts.signal]) : deadline;
 
   let continuations = 0;
   try {

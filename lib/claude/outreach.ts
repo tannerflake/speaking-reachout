@@ -40,6 +40,8 @@ export async function generateOutreach(params: {
   oneOffInstruction?: string;
   /** Active voice_profile.prompt_injection (Voice & Insights feature). */
   voiceInjection?: string | null;
+  /** Deadline for the researched generation (default: the client's 4 min). */
+  timeoutMs?: number;
 }): Promise<GeneratedOutreach> {
   const { lead, contact, rules, oneOffInstruction, voiceInjection } = params;
 
@@ -89,6 +91,7 @@ Research the org/event with web search, then return the JSON { subject, body }.`
     userPrompt,
     maxTokens: 8000,
     maxSearches: 6,
+    timeoutMs: params.timeoutMs,
     feature: "outreach",
   });
 

@@ -1,14 +1,24 @@
 import { createAdminClient } from "@/lib/supabase/admin";
+import type {
+  CandidateRecord,
+  DiscoveryProgress,
+  StopReason,
+} from "@/lib/claude/discovery";
 import type { ContactStatus, DiscoveredLead, LeadType } from "@/lib/types";
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
-export interface DiscoverySummary {
-  inserted: number;
-  failedBatches: number;
-  rawCount: number;
+export interface DiscoverySummary extends DiscoveryProgress {
+  /** discovery_runs id, or null when the run could not be recorded. */
+  runId: string | null;
   requested: number;
+  inserted: number;
   needsLookup: number;
+  stopReason: StopReason;
+  /** Distinct search errors (timeouts, API failures). */
+  errors: string[];
+  /** Every candidate the models proposed and what happened to it. */
+  candidates: CandidateRecord[];
   error?: string;
 }
 
@@ -33,6 +43,8 @@ export async function insertDiscoveredLead(
   lead: DiscoveredLead,
   detail: string,
   runId: string | null = null,
+  /** Queue the lead for contact finding + drafting (needs migration 0030). */
+  queueEnrich = false,
 ): Promise<InsertedLead | null> {
   const { data, error } = await admin
     .from("leads")
@@ -50,6 +62,7 @@ export async function insertDiscoveredLead(
       // Only set when the run row exists, so discovery keeps working before
       // migration 0027 is applied.
       ...(runId ? { discovery_run_id: runId } : {}),
+      ...(queueEnrich ? { enrich_status: "pending" } : {}),
     })
     .select("id")
     .single();
@@ -87,20 +100,26 @@ export async function insertDiscoveredLead(
 }
 
 /**
- * Open a discovery_runs row for this run. Returns null when the table is
- * missing (migration 0027 not applied) so discovery still runs untracked.
+ * Open a discovery_runs row for this run. Returns null when the table (or its
+ * 0030 columns) is missing, so discovery still runs untracked.
  */
 export async function startDiscoveryRun(
   admin: AdminClient,
   requested: number,
   focus: string | undefined,
+  autoEnrich: boolean,
 ): Promise<string | null> {
   const { data, error } = await admin
     .from("discovery_runs")
-    .insert({ requested, focus: focus ?? null })
+    .insert({ requested, focus: focus ?? null, auto_enrich: autoEnrich })
     .select("id")
     .single();
-  if (error || !data) return null;
+  if (error || !data) {
+    console.warn(
+      `[discover] run not recorded (apply supabase/migrations/0030_discovery_tracking.sql): ${error?.message ?? "no row"}`,
+    );
+    return null;
+  }
   return (data as { id: string }).id;
 }
 
@@ -113,6 +132,14 @@ export async function updateDiscoveryRun(
     inserted?: number;
     raw_count?: number;
     failed_batches?: number;
+    duplicates?: number;
+    repeats?: number;
+    rule_filtered?: number;
+    surplus?: number;
+    rounds?: number;
+    searches?: number;
+    stop_reason?: StopReason;
+    candidates?: CandidateRecord[];
     error?: string;
   },
 ): Promise<void> {
@@ -122,4 +149,18 @@ export async function updateDiscoveryRun(
     .from("discovery_runs")
     .update({ ...patch, ...finished })
     .eq("id", runId);
+}
+
+/** Has the operator pressed Stop on this run? */
+export async function discoveryStopRequested(
+  admin: AdminClient,
+  runId: string | null,
+): Promise<boolean> {
+  if (!runId) return false;
+  const { data } = await admin
+    .from("discovery_runs")
+    .select("cancel_requested")
+    .eq("id", runId)
+    .maybeSingle();
+  return Boolean((data as { cancel_requested?: boolean } | null)?.cancel_requested);
 }

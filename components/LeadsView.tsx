@@ -30,7 +30,7 @@ import {
   queueSendForLeads,
   sendQueueStatus,
 } from "@/app/actions/outreach";
-import { enrichLead } from "@/app/actions/pipeline";
+import { ENRICH_PARALLEL, enrichLeadViaApi } from "@/lib/enrich/client";
 import type { QueueStatus } from "@/lib/outreach/send";
 import { bulkDeleteLeads } from "@/app/actions/leads";
 import { bulkFindContacts } from "@/app/actions/contacts";
@@ -538,7 +538,7 @@ export function LeadsView({
               if (!id) return;
               let res;
               try {
-                res = await enrichLead(id);
+                res = await enrichLeadViaApi(id);
               } finally {
                 clearWorking([id]);
               }
@@ -552,7 +552,9 @@ export function LeadsView({
             }
           }
           try {
-            await Promise.all([worker(), worker()]);
+            await Promise.all(
+              Array.from({ length: ENRICH_PARALLEL }, () => worker()),
+            );
           } finally {
             clearWorking(ids);
             setProgress(null);
@@ -627,7 +629,7 @@ export function LeadsView({
               if (!job) return;
               try {
                 if (job.find) {
-                  const res = await enrichLead(job.id);
+                  const res = await enrichLeadViaApi(job.id);
                   drafts += res.draftsCreated;
                   if (res.error) prepErrors += 1;
                 } else {
@@ -648,7 +650,9 @@ export function LeadsView({
           }
           if (prepTotal > 0) {
             try {
-              await Promise.all([worker(), worker()]);
+              await Promise.all(
+              Array.from({ length: ENRICH_PARALLEL }, () => worker()),
+            );
             } finally {
               clearWorking([...toFind, ...toDraft]);
               setProgress(null);
