@@ -14,6 +14,20 @@ export interface HunterPerson {
   last_name?: string;
   position?: string;
   confidence?: number;
+  /** Hunter's own mailbox check, when it has run one for this address. */
+  verification?: { status?: string | null; date?: string | null } | null;
+}
+
+/**
+ * What a Hunter result really tells us. A domain search lists addresses Hunter
+ * has SEEN somewhere, not addresses it has checked; only its "valid"
+ * verification counts as verified. Everything else (accept_all, unknown, no
+ * check at all) is unverified and held until verified. "invalid" is dropped.
+ */
+export function hunterContactStatus(p: HunterPerson): ContactStatus | null {
+  const s = (p.verification?.status ?? "").toLowerCase();
+  if (s === "invalid") return null;
+  return s === "valid" ? "verified" : "unverified";
 }
 
 /** Hunter Domain Search: up to 10 public emails at a domain (1 credit). */
@@ -72,6 +86,7 @@ export async function hunterFindPerson(
     if (!d?.email || !looksLikeRealEmail(d.email) || (d.score ?? 0) < 50) {
       return null;
     }
+    if ((d.verification?.status ?? "").toLowerCase() === "invalid") return null;
     return {
       email: d.email.toLowerCase(),
       position: d.position ?? null,

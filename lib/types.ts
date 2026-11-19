@@ -51,7 +51,16 @@ export const PIPELINE_STATUSES: LeadStatus[] = [
 /** Where a lead originated: outbound discovery vs. the jeffflake.com form. */
 export type LeadSource = "outbound" | "website_inbound";
 
-export type ContactStatus = "verified" | "unverified" | "needs_lookup";
+/**
+ * "bounced" = a hard bounce came back; "invalid" = the email verifier says the
+ * mailbox doesn't exist. Neither is ever emailed again (migration 0031).
+ */
+export type ContactStatus =
+  | "verified"
+  | "unverified"
+  | "needs_lookup"
+  | "bounced"
+  | "invalid";
 
 /**
  * "blocked" = the engagement guard refused to send because the organization

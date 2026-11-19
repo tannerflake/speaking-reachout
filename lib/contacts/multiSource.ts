@@ -3,7 +3,11 @@ import { extractJson } from "@/lib/claude/json";
 import { getEnv } from "@/lib/env";
 import { domainFromUrl, looksLikeRealEmail, mapWithConcurrency } from "@/lib/utils";
 import type { ContactStatus } from "@/lib/types";
-import { hunterDomainPeople, hunterFindPerson } from "@/lib/contacts/hunter";
+import {
+  hunterContactStatus,
+  hunterDomainPeople,
+  hunterFindPerson,
+} from "@/lib/contacts/hunter";
 import { personKey } from "@/lib/contacts/personKey";
 
 export { personKey };
@@ -471,6 +475,9 @@ export async function findContactsMultiSource(
     const people = await hunterDomainPeople(orgDomain, hunterKey);
     for (const p of people) {
       if (!looksLikeRealEmail(p.value)) continue;
+      // Listed by Hunter is not the same as checked by Hunter.
+      const hunterStatus = hunterContactStatus(p);
+      if (!hunterStatus) continue;
       const email = (p.value as string).toLowerCase();
       if (excludeEmails.has(email)) continue;
       const full = [p.first_name, p.last_name].filter(Boolean).join(" ");
@@ -479,7 +486,7 @@ export async function findContactsMultiSource(
       if (existing) {
         if (!existing.email) {
           existing.email = email;
-          existing.contact_status = "verified";
+          existing.contact_status = hunterStatus;
         }
         if (!existing.sources.includes("hunter")) existing.sources.push("hunter");
       } else if (key && !excludeKeys.has(key) && roleRank(p.position ?? null) >= 2) {
@@ -487,7 +494,7 @@ export async function findContactsMultiSource(
           name: full,
           role: p.position ?? null,
           email,
-          contact_status: "verified",
+          contact_status: hunterStatus,
           source_url: `https://${orgDomain}`,
           sources: ["hunter"],
           lookupAttempted: true,

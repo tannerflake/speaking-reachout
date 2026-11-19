@@ -10,6 +10,9 @@ import {
 } from "@/lib/utils";
 import type { LeadStatus } from "@/lib/types";
 import { organizationSearchPhrases } from "@/lib/outreach/orgName";
+import { isSharedEventDomain } from "@/lib/outreach/sharedDomains";
+import { looksLikeDeliveryFailure } from "@/lib/gmail/bounce";
+import type { gmail_v1 } from "googleapis";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = SupabaseClient<any, any, any>;
@@ -34,6 +37,20 @@ type Db = SupabaseClient<any, any, any>;
  *      organization ("American Council of Engineering Companies"). A booking
  *      made through a speakers bureau lives only in threads with the bureau,
  *      so the org's own domain never appears.
+ *
+ * What does NOT count (each was a real false block):
+ *   - Delivery failures and auto-replies. A bounce of our own pitch quotes the
+ *     org's name and comes "from" its mail server; it is not a conversation.
+ *   - A shared event-company domain (Informa, Hyve, Emerald, Clarion, RX, ...;
+ *     lib/outreach/sharedDomains.ts). One informa.com address says nothing
+ *     about another Informa event, so those domains are never an org's
+ *     identity; only mail with the same PERSON (address) or naming the same
+ *     event counts.
+ *   - A name found only loosely. Gmail search is case-insensitive and reads
+ *     attachments, so "POSSIBLE" matched "possible" inside a PDF. A name must
+ *     appear as an exact phrase in the subject or message text (never only
+ *     in an attachment), and a one-word name must appear as written AND
+ *     alongside the org's domain or a fuller name.
  *
  * The guard FAILS CLOSED: if the mailbox can't be checked, nothing is sent.
  * Callers may skip the mailbox step only for advisory checks (drafting, queue
@@ -138,8 +155,25 @@ export async function resolveOrganization(
   db: Db,
   leadId: string,
   extraEmails: Array<string | null | undefined> = [],
-): Promise<{ lead: LeadRow; domains: Set<string>; members: LeadRow[] }> {
-  return orgMembers(await loadOrgSnapshot(db), leadId, extraEmails);
+): Promise<{
+  lead: LeadRow;
+  domains: Set<string>;
+  members: LeadRow[];
+  /** Addresses at shared event-company domains: matched per person only. */
+  sharedAddresses: Set<string>;
+}> {
+  const snap = await loadOrgSnapshot(db);
+  const org = orgMembers(snap, leadId, extraEmails);
+  const memberIds = new Set(org.members.map((m) => m.id));
+  const sharedAddresses = new Set<string>();
+  for (const e of [
+    ...snap.contacts.filter((c) => memberIds.has(c.lead_id)).map((c) => c.email),
+    ...extraEmails,
+  ]) {
+    const d = orgDomainOfEmail(e);
+    if (d && isSharedEventDomain(d)) sharedAddresses.add((e as string).trim().toLowerCase());
+  }
+  return { ...org, sharedAddresses };
 }
 
 interface OrgSnapshot {
@@ -178,15 +212,17 @@ async function loadOrgSnapshot(db: Db): Promise<OrgSnapshot> {
 
   // Domains per lead: website + every contact's org email domain.
   const domainsByLead = new Map<string, Set<string>>();
+  // Shared event-company domains are left out: they identify a company that
+  // runs hundreds of unrelated events, not this organization.
   for (const l of leads) {
     const s = new Set<string>();
     const d = registrableDomain(domainFromUrl(l.website));
-    if (d) s.add(d);
+    if (d && !isSharedEventDomain(d)) s.add(d);
     domainsByLead.set(l.id, s);
   }
   for (const c of contacts) {
     const d = orgDomainOfEmail(c.email);
-    if (d) domainsByLead.get(c.lead_id)?.add(d);
+    if (d && !isSharedEventDomain(d)) domainsByLead.get(c.lead_id)?.add(d);
   }
   return { leads, contacts, domainsByLead };
 }
@@ -203,7 +239,7 @@ function orgMembers(
   const domains = new Set(domainsByLead.get(leadId) ?? []);
   for (const e of extraEmails) {
     const d = orgDomainOfEmail(e);
-    if (d) domains.add(d);
+    if (d && !isSharedEventDomain(d)) domains.add(d);
   }
 
   const key = lead.name_normalized ?? normalizeName(lead.name);
@@ -392,7 +428,7 @@ export async function checkEngagementGuard(
     batch?: GuardBatch;
   } = {},
 ): Promise<EngagementGuardResult> {
-  const { lead, domains, members } = await resolveOrganization(db, leadId, [
+  const { domains, members, sharedAddresses } = await resolveOrganization(db, leadId, [
     opts.contactEmail,
   ]);
   const memberIds = members.map((m) => m.id);
@@ -415,7 +451,7 @@ export async function checkEngagementGuard(
     ...new Set(members.flatMap((m) => organizationSearchPhrases(m.name))),
   ];
   let gmailChecked = false;
-  if (!opts.skipGmail && (domains.size > 0 || names.length > 0)) {
+  if (!opts.skipGmail && (domains.size > 0 || names.length > 0 || sharedAddresses.size > 0)) {
     // Every thread this app ever started, CRM-wide, so an app send to the
     // same domain from any lead is recognized as ours rather than as a
     // hand-written thread.
@@ -443,6 +479,11 @@ export async function checkEngagementGuard(
     }
     for (const domain of domains) {
       const found = await gmailConflictsForDomain(domain, appSends, opts.batch);
+      conflicts.push(...found);
+    }
+    // Shared event-company domains: the same person only, never the domain.
+    for (const address of sharedAddresses) {
+      const found = await gmailConflictsForDomain(address, appSends, opts.batch);
       conflicts.push(...found);
     }
     if (names.length > 0) {
@@ -488,7 +529,19 @@ const AUTOMATED_FROM = /(no-?reply|do-?not-?reply|mailer-daemon|postmaster|bounc
 
 /** Out-of-office replies and bounces are not a human conversation. */
 export function isAutomatedMessage(from: string, subject: string): boolean {
-  return AUTOMATED_FROM.test(from) || AUTOMATED_SUBJECT.test(subject);
+  return (
+    AUTOMATED_FROM.test(from) ||
+    AUTOMATED_SUBJECT.test(subject) ||
+    looksLikeDeliveryFailure(from, subject)
+  );
+}
+
+/** Header-aware version for messages whose headers we have. */
+function isAutomatedMeta(m: MessageMeta): boolean {
+  if (isAutomatedMessage(m.from, m.subject)) return true;
+  if (looksLikeDeliveryFailure(m.from, m.subject, m.headers)) return true;
+  const auto = (m.headers["Auto-Submitted"] ?? "").trim().toLowerCase();
+  return Boolean(auto && auto !== "no");
 }
 
 interface GmailCacheEntry {
@@ -545,7 +598,11 @@ interface MessageMeta {
   subject: string;
   internalDate: string | null;
   snippet: string;
+  /** The few extra headers that identify bounces and auto-replies. */
+  headers: Record<string, string>;
 }
+
+const META_HEADERS = ["From", "To", "Subject", "Content-Type", "X-Failed-Recipients", "Auto-Submitted"];
 const MESSAGE_META_MAX = 5000;
 const messageMeta = new Map<string, MessageMeta>();
 
@@ -560,19 +617,25 @@ async function getMessageMeta(
       userId: "me",
       id,
       format: "metadata",
-      metadataHeaders: ["From", "To", "Subject"],
+      metadataHeaders: META_HEADERS,
       fields: "internalDate,snippet,payload/headers",
     }),
   );
   const h = res.data.payload?.headers ?? [];
   const get = (n: string) =>
     h.find((x) => x.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
+  const headers: Record<string, string> = {};
+  for (const name of META_HEADERS) {
+    const v = get(name);
+    if (v) headers[name] = v;
+  }
   const meta: MessageMeta = {
     from: get("From"),
     to: get("To"),
     subject: get("Subject"),
     internalDate: res.data.internalDate ?? null,
     snippet: res.data.snippet ?? "",
+    headers,
   };
   if (messageMeta.size >= MESSAGE_META_MAX) {
     const oldest = messageMeta.keys().next().value;
@@ -638,6 +701,8 @@ async function gmailConflictsForDomain(
 
   const conflicts: EngagementConflict[] = [];
   const window = `newer_than:${GMAIL_LOOKBACK_DAYS}d -in:spam -in:trash`;
+  // A whole domain ("@school.edu") or, for shared event companies, one person.
+  const label = domain.includes("@") ? domain : `@${domain}`;
 
   async function describe(id: string): Promise<{ from: string; to: string; subject: string; date: string }> {
     const m = await getMessageMeta(gmail, id);
@@ -663,13 +728,13 @@ async function gmailConflictsForDomain(
     );
     for (const msg of inbound.data.messages ?? []) {
       if (!msg.id) continue;
+      if (isAutomatedMeta(await getMessageMeta(gmail, msg.id))) continue;
       const m = await describe(msg.id);
-      if (isAutomatedMessage(m.from, m.subject)) continue;
       conflicts.push({
         kind: "gmail_inbound",
         leadId: null,
         leadName: null,
-        detail: `The mailbox has a reply from @${domain}: "${m.subject}" from ${m.from}${m.date ? ` on ${m.date}` : ""}.`,
+        detail: `The mailbox has a reply from ${label}: "${m.subject}" from ${m.from}${m.date ? ` on ${m.date}` : ""}.`,
       });
       break;
     }
@@ -705,7 +770,7 @@ async function gmailConflictsForDomain(
         kind: "gmail_outbound",
         leadId: null,
         leadName: null,
-        detail: `The mailbox already has outreach to @${domain} that this app did not send: "${first.subject}" to ${first.to}${first.date ? ` on ${first.date}` : ""}${
+        detail: `The mailbox already has outreach to ${label} that this app did not send: "${first.subject}" to ${first.to}${first.date ? ` on ${first.date}` : ""}${
           foreignCount > 1 ? ` (and ${foreignCount - 1} more)` : ""
         }.`,
       });
@@ -713,8 +778,8 @@ async function gmailConflictsForDomain(
   } catch (e) {
     throw new EngagementGuardUnavailableError(
       e instanceof Error
-        ? `Could not check the mailbox for @${domain}: ${e.message}`
-        : `Could not check the mailbox for @${domain}.`,
+        ? `Could not check the mailbox for ${domain.includes("@") ? domain : `@${domain}`}: ${e.message}`
+        : `Could not check the mailbox for ${domain.includes("@") ? domain : `@${domain}`}.`,
     );
   }
 
@@ -771,12 +836,15 @@ async function gmailConflictsForNames(
       const meta = await getMessageMeta(gmail, msg.id);
       const from = meta.from;
       const subject = meta.subject;
-      if (isAutomatedMessage(from, subject)) continue;
+      if (isAutomatedMeta(meta)) continue;
       if (orgSubjects.has(baseSubject(subject))) continue;
       const fromDomain = orgDomainOfEmail(addressesIn(from)[0]);
       if (fromDomain && domains.has(fromDomain)) continue; // reported by domain
-      const text = `${subject} ${meta.snippet}`.toLowerCase();
-      const named = names.find((n) => text.includes(n.toLowerCase()));
+      // Gmail matched loosely (any case, attachments included). Confirm on
+      // the subject and message text only.
+      const text = `${subject}\n${await messageText(gmail, msg.id)}`;
+      const named = confirmedNameMatch(text, names, domains);
+      if (!named) continue;
       const date = meta.internalDate
         ? fmtDate(new Date(Number(meta.internalDate)).toISOString())
         : "";
@@ -784,9 +852,9 @@ async function gmailConflictsForNames(
         kind: "gmail_mention",
         leadId: null,
         leadName: null,
-        detail: `The mailbox has mail from ${from} that mentions ${
-          named ? `"${named}"` : `this organization (${names.map((n) => `"${n}"`).join(" or ")})`
-        }: "${subject}"${date ? ` on ${date}` : ""}. It may be a booking through a speakers bureau or a contact outside the org's own email.`,
+        detail: `The mailbox has mail from ${from} that mentions "${named}": "${subject}"${
+          date ? ` on ${date}` : ""
+        }. It may be a booking through a speakers bureau or a contact outside the org's own email.`,
       });
       break;
     }
@@ -801,4 +869,85 @@ async function gmailConflictsForNames(
   gmailCache.set(cacheKey, { at: Date.now(), conflicts });
   batch?.gmail.set(batchKey, conflicts);
   return conflicts;
+}
+
+// --- Name matching -------------------------------------------------------------
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** The phrase as whole words, whitespace-tolerant ("Kenan  Institute"). */
+function phraseRe(phrase: string, flags: string): RegExp {
+  const body = phrase.trim().split(/\s+/).map(escapeRe).join("\\s+");
+  return new RegExp(`(^|[^A-Za-z0-9])${body}($|[^A-Za-z0-9])`, flags);
+}
+
+/**
+ * Which org name the text really mentions, or null. Multi-word names must
+ * appear as an exact phrase (any case). A one-word name ("POSSIBLE", "ACEC")
+ * is too easy to hit by accident, so it must appear exactly as written
+ * (case-sensitive) AND the text must also carry the org's domain or one of
+ * its multi-word names. Exported for tests.
+ */
+export function confirmedNameMatch(
+  text: string,
+  names: string[],
+  domains: Set<string>,
+): string | null {
+  const multi = names.filter((n) => /\s/.test(n.trim()));
+  const hitMulti = multi.find((n) => phraseRe(n, "i").test(text));
+  if (hitMulti) return hitMulti;
+  const lower = text.toLowerCase();
+  const corroborated = [...domains].some((d) => lower.includes(d.toLowerCase()));
+  if (!corroborated) return null;
+  return names.find((n) => !/\s/.test(n.trim()) && phraseRe(n, "").test(text)) ?? null;
+}
+
+const MESSAGE_TEXT_MAX = 500;
+const messageTexts = new Map<string, string>();
+
+/**
+ * Subject-less body text of a message: text/plain parts (else text/html,
+ * stripped), skipping anything that is an attachment. Cached per id.
+ */
+async function messageText(
+  gmail: Awaited<ReturnType<typeof getGmailClient>>["gmail"],
+  id: string,
+): Promise<string> {
+  const hit = messageTexts.get(id);
+  if (hit !== undefined) return hit;
+  const res = await withGmailRetry(() =>
+    gmail.users.messages.get({ userId: "me", id, format: "full" }),
+  );
+  const plain: string[] = [];
+  const html: string[] = [];
+  const walk = (part: gmail_v1.Schema$MessagePart | undefined) => {
+    if (!part) return;
+    const disposition =
+      part.headers?.find((h) => h.name?.toLowerCase() === "content-disposition")?.value ?? "";
+    const isAttachment =
+      Boolean(part.filename) || /attachment/i.test(disposition) || Boolean(part.body?.attachmentId);
+    if (!isAttachment && part.body?.data) {
+      const text = Buffer.from(part.body.data, "base64url").toString("utf-8");
+      if (part.mimeType === "text/plain") plain.push(text);
+      else if (part.mimeType === "text/html") html.push(text);
+    }
+    for (const p of part.parts ?? []) walk(p);
+  };
+  walk(res.data.payload ?? undefined);
+  const text = plain.length
+    ? plain.join("\n")
+    : html
+        .join("\n")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/gi, " ")
+        .replace(/&amp;/gi, "&");
+  if (messageTexts.size >= MESSAGE_TEXT_MAX) {
+    const oldest = messageTexts.keys().next().value;
+    if (oldest !== undefined) messageTexts.delete(oldest);
+  }
+  messageTexts.set(id, text);
+  return text;
 }

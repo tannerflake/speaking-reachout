@@ -18,10 +18,13 @@ import {
 import {
   FOLLOWUP_ELIGIBLE_STATUSES,
   MAX_FOLLOWUPS,
-  computeDueAt,
+  followupEarliest,
   followupStatusForStep,
   stepOfStatus,
 } from "@/lib/followups/cadence";
+import { loadSendLedger, takeSlot, tzOfLead } from "@/lib/outreach/slots";
+import { markAddressBounced } from "@/lib/contacts/deliverability";
+import { looksLikeDeliveryFailure } from "@/lib/gmail/bounce";
 import type {
   Contact,
   FollowupSequence,
@@ -46,26 +49,91 @@ export interface RunSummary {
 type Admin = ReturnType<typeof createAdminClient>;
 
 /**
- * Start a follow-up sequence for a just-sent initial outreach. Idempotent:
- * a second call for the same outreach is a no-op.
+ * The exact send slot for follow-up `step` of a sequence: the cadence gives
+ * the earliest day (days after the previous email, in the recipient's time
+ * zone), and the send schedule (lib/outreach/schedule.ts) picks a business-hour
+ * slot on or after it that fits the mailbox's pacing and caps.
+ */
+export async function planFollowupSlot(
+  admin: Admin,
+  seq: { id: string; lead_id: string },
+  opts: { earliest: number; email?: string | null },
+): Promise<number> {
+  const [{ data: lead }, ledger] = await Promise.all([
+    admin
+      .from("leads")
+      .select("location_region, location_country")
+      .eq("id", seq.lead_id)
+      .maybeSingle(),
+    loadSendLedger(admin),
+  ]);
+  return takeSlot(
+    ledger,
+    {
+      kind: "followup",
+      id: seq.id,
+      leadId: seq.lead_id,
+      email: opts.email ?? null,
+      tz: tzOfLead(lead as { location_region: string | null; location_country: string | null } | null),
+    },
+    opts.earliest,
+  );
+}
+
+async function leadTz(admin: Admin, leadId: string): Promise<string> {
+  const { data } = await admin
+    .from("leads")
+    .select("location_region, location_country")
+    .eq("id", leadId)
+    .maybeSingle();
+  return tzOfLead(data as { location_region: string | null; location_country: string | null } | null);
+}
+
+/**
+ * Start a follow-up sequence for a just-sent initial outreach, with the first
+ * nudge on a real send slot. Idempotent: a second call for the same outreach
+ * is a no-op. Returns the first follow-up's slot (ms), or null.
  */
 export async function startSequence(
   admin: Admin,
   outreach: Pick<Outreach, "id" | "lead_id" | "contact_id" | "sent_at">,
-): Promise<void> {
+  opts: { email?: string | null } = {},
+): Promise<number | null> {
   const sentAt = outreach.sent_at ? new Date(outreach.sent_at) : new Date();
-  await admin.from("followup_sequences").upsert(
-    {
-      outreach_id: outreach.id,
-      lead_id: outreach.lead_id,
-      contact_id: outreach.contact_id,
-      steps_sent: 0,
-      max_steps: MAX_FOLLOWUPS,
-      next_due_at: computeDueAt(sentAt, 1).toISOString(),
-      status: "active",
-    },
-    { onConflict: "outreach_id", ignoreDuplicates: true },
-  );
+  const tz = await leadTz(admin, outreach.lead_id);
+  const earliest = followupEarliest(sentAt, 1, tz);
+  const { data } = await admin
+    .from("followup_sequences")
+    .upsert(
+      {
+        outreach_id: outreach.id,
+        lead_id: outreach.lead_id,
+        contact_id: outreach.contact_id,
+        steps_sent: 0,
+        max_steps: MAX_FOLLOWUPS,
+        next_due_at: new Date(earliest).toISOString(),
+        status: "active",
+      },
+      { onConflict: "outreach_id", ignoreDuplicates: true },
+    )
+    .select("id");
+  const seqId = (data as Array<{ id: string }> | null)?.[0]?.id;
+  if (!seqId) return null;
+  try {
+    const at = await planFollowupSlot(
+      admin,
+      { id: seqId, lead_id: outreach.lead_id },
+      { earliest, email: opts.email },
+    );
+    await admin
+      .from("followup_sequences")
+      .update({ next_due_at: new Date(at).toISOString() })
+      .eq("id", seqId);
+    return at;
+  } catch {
+    // The day-level due date stands; the queue tick fits it to a slot.
+    return earliest;
+  }
 }
 
 /** Stop the sequence whose initial outreach started the given Gmail thread. */
@@ -197,10 +265,14 @@ async function processSequence(
     return "stopped";
   }
 
-  // Guard 3: a usable recipient.
+  // Guard 3: a usable recipient that hasn't bounced.
   const email = seq.contact?.email ?? null;
   if (!looksLikeRealEmail(email)) {
     await stop(admin, seq, "Contact has no valid email.");
+    return "stopped";
+  }
+  if (seq.contact?.contact_status === "bounced" || seq.contact?.contact_status === "invalid") {
+    await stop(admin, seq, "Email bounced.");
     return "stopped";
   }
 
@@ -282,12 +354,9 @@ async function processSequence(
       .update({ bounced_at: new Date().toISOString() })
       .eq("id", root.id)
       .is("bounced_at", null);
-    await stop(
-      admin,
-      seq,
-      "Email bounced.",
-      `Delivery to ${email} bounced; follow-ups stopped. Consider re-looking up the address.`,
-    );
+    await stop(admin, seq, "Email bounced.");
+    // A delivery failure in our own thread: never email this address again.
+    await markAddressBounced(admin, email as string, "delivery failure in the outreach thread");
     return "stopped";
   }
 
@@ -322,13 +391,16 @@ async function processSequence(
   });
 
   const subject = /^re:/i.test(root.subject) ? root.subject : `Re: ${root.subject}`;
+  // Thread properly in every client, not just Gmail: In-Reply-To the last
+  // message we sent, References the whole chain.
+  const inReplyTo = thread.lastOurRfcId ?? thread.references[thread.references.length - 1] ?? null;
   const result = await sendGmail({
     to: email as string,
     subject,
     body: gen.body,
     thread: {
       threadId: root.gmail_thread_id,
-      inReplyTo: thread.lastOurRfcId,
+      inReplyTo,
       references: thread.references,
     },
   });
@@ -348,12 +420,21 @@ async function processSequence(
   });
 
   const done = step >= seq.max_steps;
+  let nextAt: number | null = null;
+  if (!done) {
+    const earliest = followupEarliest(now, step + 1, tzOfLead(lead));
+    try {
+      nextAt = await planFollowupSlot(admin, seq, { earliest, email });
+    } catch {
+      nextAt = earliest;
+    }
+  }
   await admin
     .from("followup_sequences")
     .update({
       steps_sent: step,
       status: done ? "completed" : "active",
-      next_due_at: done ? null : computeDueAt(now, step + 1).toISOString(),
+      next_due_at: nextAt === null ? null : new Date(nextAt).toISOString(),
       last_error: null,
     })
     .eq("id", seq.id);
@@ -378,49 +459,47 @@ async function processSequence(
   return "sent";
 }
 
+export interface FollowupContext {
+  rules: TailoringRule[];
+  voiceInjection: string | null;
+  guardBatch: GuardBatch;
+}
+
+export async function newFollowupContext(
+  admin: Admin,
+  guardBatch: GuardBatch = newGuardBatch(),
+): Promise<FollowupContext> {
+  return { ...(await getRulesAndVoice(admin)), guardBatch };
+}
+
 /**
- * Send every follow-up that is due. Called by the daily scheduler and by the
- * operator's "Send due follow-ups" button. Each sequence is processed
- * sequentially (Gmail + one short model call each) and failures are isolated.
+ * Send the next follow-up for ONE sequence, after re-checking every guard.
+ * Called by the send-queue tick (lib/outreach/send.ts) when the sequence's
+ * slot comes up; pacing has already been checked there. Throws on a mailbox
+ * or Gmail error so the tick can retry later.
  */
-export async function runDueFollowups(opts?: {
-  /** Process these sequence ids regardless of due date (operator "send now"). */
-  sequenceIds?: string[];
-  limit?: number;
-}): Promise<RunSummary> {
+export async function sendFollowupForSequence(
+  admin: Admin,
+  sequenceId: string,
+  ctx: FollowupContext,
+): Promise<"sent" | "stopped" | "skipped"> {
+  const [seq] = await loadSequences(admin, { dueOnly: false, ids: [sequenceId] });
+  if (!seq || seq.status !== "active") return "skipped";
+  return processSequence(admin, seq, ctx);
+}
+
+/**
+ * The daily follow-up job: read new replies so organizations that answered
+ * drop out before their next nudge. Sending itself happens one email at a
+ * time on scheduled slots via the send-queue tick.
+ */
+export async function scanRepliesForFollowups(): Promise<RunSummary> {
   const admin = createAdminClient();
-  const summary: RunSummary = { checked: 0, sent: 0, stopped: 0, errors: [] };
-
-  // Read new replies first: a reply from anyone at an organization marks the
-  // lead Interested / Not interested and stops follow-ups to everyone there,
-  // so those sequences drop out of the load below. If the scan fails, sending
-  // still proceeds: each send re-checks its own thread and the org's mailbox.
-  summary.replyScan = await scanInboxForReplies(admin);
-
-  const sequences = await loadSequences(admin, {
-    dueOnly: !opts?.sequenceIds,
-    ids: opts?.sequenceIds,
-  });
-  const batch = sequences.slice(0, opts?.limit ?? 40);
-  if (batch.length === 0) return summary;
-
-  // One mailbox search per organization for the whole run.
-  const ctx = { ...(await getRulesAndVoice(admin)), guardBatch: newGuardBatch() };
-
-  for (const seq of batch) {
-    summary.checked += 1;
-    try {
-      const outcome = await processSequence(admin, seq, ctx);
-      if (outcome === "sent") summary.sent += 1;
-      else if (outcome === "stopped") summary.stopped += 1;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Follow-up failed.";
-      summary.errors.push(msg);
-      await admin
-        .from("followup_sequences")
-        .update({ last_error: msg })
-        .eq("id", seq.id);
-    }
-  }
-  return summary;
+  return {
+    checked: 0,
+    sent: 0,
+    stopped: 0,
+    errors: [],
+    replyScan: await scanInboxForReplies(admin),
+  };
 }

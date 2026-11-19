@@ -19,7 +19,7 @@ The email MUST:
 - Reference something real and current about the institution/event (a recent theme, initiative, program, anniversary, or stated mission). Do NOT fabricate facts — if web search turns up nothing usable, say so plainly in the body rather than inventing details.
 - Propose 1-3 concrete talk topics tailored to that audience.
 - Make a genuine, specific case for why Jeff Flake is the right speaker for THIS venue (tie his background to their audience/mission).
-- Optionally include 1-2 relevant links (an article, talk, or story) that support the pitch.
+- Read as a plain, personal, one-to-one email: no links or URLs (at most one, only if it is truly essential), no bullet lists, no bold, no headings, no emoji, nothing that looks like a newsletter or marketing template. Nothing is attached, so never say "attached", "enclosed" or "please find"; if an overview would help, offer to send one ("I would be happy to send a one-page overview of Jeff's talks").
 - Always include one sentence near the closing ask that names the honorarium as something to discuss next, so the reader knows this is a paid engagement. Use Cheryl's own phrasing: "If this is of interest, I would love to discuss timing, logistics, and the honorarium with you." ("speaking fees" may stand in for "the honorarium"). Light rewording to fit the email is fine, but the money must be named explicitly. Never say or imply the fee is flexible, negotiable, or can fit their range or budget, even if a rule or learned voice below suggests it; Cheryl handles that on the call. Do not call it "customary", do not mention travel expenses, and give no dollar figure, no fee range, and no hint that the fee is flexible or negotiable.
 - Be appropriately concise and professional; ready to send with light editing.
 - Open with an appropriate greeting (use the contact's name if provided) and close with a clear, low-friction ask for a call or reply.
@@ -51,8 +51,13 @@ export async function generateOutreach(params: {
     ? `\n\n--- Jeff's learned voice & proven tactics (distilled from his real email history) ---\n${voiceInjection}\n--- end learned voice ---\nIf any operator style rule below conflicts with this learned voice, the operator rule wins.\n`
     : "";
 
+  // Deliverability rules come last so a learned habit ("I've attached a
+  // one-pager", a row of links) can't override them.
   const system =
-    OUTREACH_SYSTEM_BASE + voiceBlock + copyStyleInstructions(rules);
+    OUTREACH_SYSTEM_BASE +
+    voiceBlock +
+    copyStyleInstructions(rules) +
+    "\n\nNon-negotiable, whatever the learned voice or rules above say: no attachment is sent, so never claim one is attached or enclosed; include no more than one link; no link shorteners.";
 
   // A shared inbox (meetings@, events@) has no person to greet: greet the
   // organization instead, never "Dear there,".

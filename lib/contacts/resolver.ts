@@ -1,7 +1,11 @@
 import { getEnv } from "@/lib/env";
 import { domainFromUrl, looksLikeRealEmail } from "@/lib/utils";
 import type { ContactStatus } from "@/lib/types";
-import { hunterFindPerson } from "@/lib/contacts/hunter";
+import {
+  hunterContactStatus,
+  hunterFindPerson,
+  type HunterPerson,
+} from "@/lib/contacts/hunter";
 
 export interface ResolvedContact {
   name: string | null;
@@ -80,13 +84,7 @@ class ClaudeContactResolver implements ContactResolver {
 }
 
 // --- Hunter.io --------------------------------------------------------------
-interface HunterEmail {
-  value?: string;
-  first_name?: string;
-  last_name?: string;
-  position?: string;
-  confidence?: number;
-}
+type HunterEmail = HunterPerson;
 
 class HunterContactResolver implements ContactResolver {
   readonly name = "hunter";
@@ -116,7 +114,9 @@ class HunterContactResolver implements ContactResolver {
         (a, b) => roleScore(b.position) - roleScore(a.position) ||
           (b.confidence ?? 0) - (a.confidence ?? 0),
       );
-      const best = ranked.find((e) => looksLikeRealEmail(e.value));
+      const best = ranked.find(
+        (e) => looksLikeRealEmail(e.value) && hunterContactStatus(e) !== null,
+      );
       if (!best || !best.value) return { ...NEEDS_LOOKUP };
 
       const fullName = [best.first_name, best.last_name]
@@ -126,8 +126,9 @@ class HunterContactResolver implements ContactResolver {
         name: fullName || null,
         role: best.position ?? null,
         email: best.value,
-        // A publicly listed email returned by the provider — treat as verified.
-        contact_status: "verified",
+        // Listed is not checked: verified only when Hunter's own mailbox
+        // check says "valid". Anything else is held until verified.
+        contact_status: hunterContactStatus(best) ?? "unverified",
         source_url: `https://${domain}`,
       };
     } catch {

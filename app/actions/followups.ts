@@ -2,8 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { runDueFollowups, type RunSummary } from "@/lib/followups/run";
-import { weekdayAfter } from "@/lib/followups/cadence";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { planFollowupSlot } from "@/lib/followups/run";
+import { runSendTick, type TickResult } from "@/lib/outreach/send";
+import { scanInboxForReplies } from "@/lib/gmail/replyScan";
 
 function revalidateLead(leadId: string | null) {
   if (leadId) revalidatePath(`/admin/leads/${leadId}`);
@@ -11,43 +13,72 @@ function revalidateLead(leadId: string | null) {
   revalidatePath("/admin");
 }
 
-/** Operator button: send everything that's due right now. */
-export async function sendDueFollowups(): Promise<RunSummary & { error?: string }> {
+/**
+ * Operator button: read new replies, then run one send-queue tick. Follow-ups
+ * go out one at a time on their scheduled slots, so this sends at most one
+ * email, and only if the pacing rules allow it right now.
+ */
+export async function sendDueFollowups(): Promise<TickResult & { error?: string; replyError?: string }> {
   try {
-    const summary = await runDueFollowups();
+    const admin = createAdminClient();
+    const scan = await scanInboxForReplies(admin);
+    const res = await runSendTick(admin);
     revalidateLead(null);
-    return summary;
+    return { ...res, replyError: scan.error };
   } catch (e) {
     return {
-      checked: 0,
       sent: 0,
-      stopped: 0,
+      failed: 0,
+      blocked: 0,
+      deferred: 0,
+      held: 0,
+      rescheduled: 0,
+      followupsSent: 0,
+      followupsStopped: 0,
+      remaining: 0,
+      nextDueAt: null,
+      busy: false,
+      waiting: null,
       errors: [],
-      error: e instanceof Error ? e.message : "Follow-up run failed.",
+      error: e instanceof Error ? e.message : "Queue run failed.",
     };
   }
 }
 
-/** Operator button on a lead: send this sequence's next follow-up today. */
+/**
+ * Operator button on a lead: move this sequence's next follow-up to the
+ * earliest open slot (still paced and inside the recipient's business hours).
+ */
 export async function sendFollowupNow(
   sequenceId: string,
 ): Promise<{ error?: string; sent?: boolean; note?: string }> {
   const supabase = await createClient();
   const { data } = await supabase
     .from("followup_sequences")
-    .select("lead_id, status")
+    .select("id, lead_id, status, contact:contacts(email)")
     .eq("id", sequenceId)
     .maybeSingle();
-  const row = data as { lead_id: string; status: string } | null;
+  const row = data as {
+    id: string;
+    lead_id: string;
+    status: string;
+    contact: { email: string | null } | { email: string | null }[] | null;
+  } | null;
   if (!row) return { error: "Sequence not found." };
   if (row.status !== "active") {
     return { error: `Sequence is ${row.status}; resume it first.` };
   }
-  const summary = await runDueFollowups({ sequenceIds: [sequenceId] });
+  const contact = Array.isArray(row.contact) ? row.contact[0] : row.contact;
+  const at = await planFollowupSlot(createAdminClient(), row, {
+    earliest: Date.now() + 60_000,
+    email: contact?.email ?? null,
+  });
+  await supabase
+    .from("followup_sequences")
+    .update({ next_due_at: new Date(at).toISOString(), last_error: null })
+    .eq("id", sequenceId);
   revalidateLead(row.lead_id);
-  if (summary.errors.length) return { error: summary.errors.join("; ") };
-  if (summary.sent) return { sent: true };
-  return { note: "Nothing sent: the sequence was stopped (reply, bounce, or status change)." };
+  return { note: `Next follow-up moved up to ${new Date(at).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" })} ET, the earliest paced slot.` };
 }
 
 export async function pauseSequence(
@@ -91,12 +122,16 @@ export async function resumeSequence(
   if (row.status !== "paused" && row.status !== "stopped") {
     return { error: `Sequence is ${row.status}.` };
   }
-  // If the due date passed while paused, push it to the next weekday rather
-  // than firing the moment it's resumed.
+  // If the due date passed while paused, give it a fresh slot from tomorrow
+  // rather than firing the moment it's resumed.
   const due =
     row.next_due_at && new Date(row.next_due_at) > new Date()
       ? row.next_due_at
-      : weekdayAfter(new Date(), 1).toISOString();
+      : new Date(
+          await planFollowupSlot(createAdminClient(), { id: sequenceId, lead_id: row.lead_id }, {
+            earliest: Date.now() + 20 * 3600 * 1000,
+          }),
+        ).toISOString();
   const { error } = await supabase
     .from("followup_sequences")
     .update({ status: "active", stop_reason: null, next_due_at: due })

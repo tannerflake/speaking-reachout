@@ -5,13 +5,16 @@ import { useRouter } from "next/navigation";
 import { OriginBadge, OutreachStatusBadge } from "@/components/Badge";
 import Link from "next/link";
 import {
-  approveAndSend,
+  approveAndSchedule,
   draftForAllContacts,
   generateDraft,
   overrideAndSend,
   regenerateDraft,
+  unscheduleOutreach,
   updateDraft,
 } from "@/app/actions/outreach";
+import { markContactVerified } from "@/app/actions/contacts";
+import type { QueueResult } from "@/lib/outreach/send";
 import type { EngagementGuardResult } from "@/lib/outreach/guard";
 import type { Contact, Outreach } from "@/lib/types";
 import {
@@ -20,6 +23,20 @@ import {
   pickPrimaryContact,
 } from "@/lib/utils";
 import { useInlineConfirm } from "@/components/InlineConfirm";
+
+function isVerified(contact: Contact | null | undefined): boolean {
+  return Boolean(contact && looksLikeRealEmail(contact.email) && contact.contact_status === "verified");
+}
+
+function when(iso: string): string {
+  return new Date(iso).toLocaleString([], {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 interface Buf {
   subject: string;
@@ -117,17 +134,63 @@ export function OutreachManager({
   );
   // When the org is in conversation, only drafts carrying an operator
   // override are sendable in bulk; the rest need an individual override.
+  // Only verified addresses are queued; guessed ones are held (bounce risk).
   const sendable = outreach.filter(
     (o) =>
       o.status !== "sent" &&
+      o.status !== "queued" &&
       (!guardBlocked || Boolean(o.guard_override_at)) &&
-      looksLikeRealEmail(contacts.find((c) => c.id === o.contact_id)?.email),
+      isVerified(contacts.find((c) => c.id === o.contact_id)),
   );
   // After a partial "send all" the leftovers carry an error; keep the bulk
   // button for them even if only one is left, so they aren't sent one by one.
   const showSendAll =
     sendable.length > 1 ||
     sendable.some((o) => o.status === "failed" || Boolean(o.error));
+
+  function describeQueue(res: QueueResult): string {
+    const parts: string[] = [];
+    if (res.queued) {
+      parts.push(
+        res.queued === 1 && res.firstAt
+          ? `Scheduled for ${when(res.firstAt)}`
+          : `Scheduled ${res.queued} emails, ${res.firstAt ? when(res.firstAt) : "soon"} to ${res.finishesAt ? when(res.finishesAt) : "later"}`,
+      );
+    }
+    if (res.needsVerification) parts.push(`${res.needsVerification} held: address needs verification`);
+    if (res.undeliverable) parts.push(`${res.undeliverable} not sent: address bounced or invalid`);
+    if (res.needsEdit) parts.push(`${res.needsEdit} need an edit first (see the draft)`);
+    if (res.blocked) parts.push(`${res.blocked} blocked: already in conversation`);
+    if (res.skipped) parts.push(`${res.skipped} without a valid email`);
+    return parts.length ? `${parts.join(". ")}.` : "Nothing to schedule.";
+  }
+
+  function markVerified(contact: Contact) {
+    ask(
+      `Confirm ${contact.email} is a real, current address (you checked it yourself)? It will then be sent like any verified address.`,
+      () => {
+        clearMsgs();
+        start(async () => {
+          const res = await markContactVerified(contact.id);
+          if (res.error) setError(res.error);
+          else setMessage(`${contact.email} marked verified.`);
+          router.refresh();
+        });
+      },
+    );
+  }
+
+  function unschedule(item: Outreach) {
+    clearMsgs();
+    setBusyId(item.id);
+    start(async () => {
+      const res = await unscheduleOutreach(item.id);
+      setBusyId(null);
+      if (res.error) setError(res.error);
+      else setMessage("Taken out of the queue; it's a draft again.");
+      router.refresh();
+    });
+  }
 
   function sendWithOverride(item: Outreach) {
     const reason = (overrideReasons[item.id] ?? "").trim();
@@ -155,7 +218,7 @@ export function OutreachManager({
             return;
           }
           clearBuf(item.id);
-          setMessage("Sent with override ✓ (logged in Activity).");
+          setMessage("Scheduled with override ✓ (logged in Activity). It goes out on the next paced slot.");
           router.refresh();
         });
       },
@@ -189,7 +252,7 @@ export function OutreachManager({
       .map((o) => contacts.find((c) => c.id === o.contact_id)?.email)
       .join("\n");
     ask(
-      `Send ${sendable.length} separate emails to:\n\n${recipients}\n\nEach person gets their own message.`,
+      `Schedule ${sendable.length} separate emails to:\n\n${recipients}\n\nEach person gets their own message. They go out in the recipient's business hours, at least 45 minutes apart, possibly over two days.`,
       () => {
         clearMsgs();
         setBusyId("sendAll");
@@ -206,42 +269,15 @@ export function OutreachManager({
               }
             }
           }
-          // One request per email. A single server action that loops over every
-          // draft gets killed by the hosting function time limit after a couple
-          // of sends, which left the rest unsent with no error shown.
-          // Strictly one at a time with a short pause, so the mailbox checks
-          // and sends don't burst through Gmail's per-minute quota. The batch
-          // id lets the server search the org's mailbox once for all of them.
-          let sent = 0;
-          const errors: string[] = [];
-          const batchId = crypto.randomUUID();
           try {
-            for (const [i, item] of sendable.entries()) {
-              if (i > 0) await new Promise((r) => setTimeout(r, 1500));
-              const email =
-                contacts.find((c) => c.id === item.contact_id)?.email ?? "?";
-              setMessage(
-                `Sending ${sent + errors.length + 1} of ${sendable.length}: ${email}…`,
-              );
-              const res = await approveAndSend(item.id, batchId);
-              if (res.error) errors.push(`${email}: ${res.error}`);
-              else sent += 1;
-            }
+            const res = await approveAndSchedule(sendable.map((o) => o.id));
+            if (res.error) setError(res.error);
+            else setMessage(describeQueue(res));
           } catch (e) {
-            errors.push(
-              e instanceof Error ? e.message : "Send request failed.",
-            );
+            setError(e instanceof Error ? e.message : "Scheduling failed.");
           }
           setBusyId(null);
           setBufs({});
-          if (errors.length > 0) {
-            setMessage(null);
-            setError(
-              `Sent ${sent}, ${errors.length} failed: ${errors.join("; ")}`,
-            );
-          } else {
-            setMessage(`Sent ${sent} emails ✓ Lead advanced to Reached out.`);
-          }
           router.refresh();
         });
       },
@@ -303,15 +339,15 @@ export function OutreachManager({
           return;
         }
       }
-      const res = await approveAndSend(item.id);
+      const res = await approveAndSchedule([item.id]);
       setBusyId(null);
-      if (res.error) {
-        setError(res.error);
+      if (res.error || res.queued === 0) {
+        setError(res.error ?? describeQueue(res));
         router.refresh();
         return;
       }
       clearBuf(item.id);
-      setMessage("Sent ✓ Lead advanced to Reached out.");
+      setMessage(describeQueue(res));
       router.refresh();
     });
   }
@@ -506,6 +542,7 @@ export function OutreachManager({
         <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
           <span className="text-sm text-blue-900">
             {sendable.length} drafts ready, each to a different contact.
+            Sends are spread out automatically.
           </span>
           <button
             onClick={sendAll}
@@ -513,8 +550,8 @@ export function OutreachManager({
             className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
           >
             {busyId === "sendAll" && pending
-              ? "Sending…"
-              : `Approve & send all ${sendable.length}`}
+              ? "Scheduling…"
+              : `Approve & schedule all ${sendable.length}`}
           </button>
         </div>
       )}
@@ -568,7 +605,9 @@ export function OutreachManager({
                   <span className="text-xs text-zinc-400">
                     {item.status === "sent" && item.sent_at
                       ? `Sent ${formatDateTime(item.sent_at)}`
-                      : `Created ${formatDateTime(item.created_at)}`}
+                      : item.status === "queued" && item.scheduled_for
+                        ? <span className="font-medium text-indigo-700">Scheduled for {when(item.scheduled_for)}</span>
+                        : `Created ${formatDateTime(item.created_at)}`}
                   </span>
                 </div>
 
@@ -597,6 +636,25 @@ export function OutreachManager({
                         No valid email for this contact yet — resolve it above
                         before sending.
                       </p>
+                    )}
+                    {hasEmail && contact && !isVerified(contact) && (
+                      <p className="text-xs text-amber-700">
+                        {contact.contact_status === "bounced" || contact.contact_status === "invalid"
+                          ? `${contact.email} ${contact.contact_status === "bounced" ? "hard-bounced" : "failed verification"}; it will never be emailed again.`
+                          : `Needs verification: ${contact.email} was guessed or found without confirmation (unverified addresses bounce about 1 in 4), so this draft is held.`}
+                        {contact.contact_status === "unverified" && (
+                          <button
+                            onClick={() => markVerified(contact)}
+                            disabled={pending}
+                            className="ml-2 rounded border border-amber-300 bg-white px-1.5 py-0.5 font-medium text-amber-800 hover:bg-amber-50"
+                          >
+                            I checked it, mark verified
+                          </button>
+                        )}
+                      </p>
+                    )}
+                    {item.status === "draft" && item.error && (
+                      <p className="text-xs text-amber-700">{item.error}</p>
                     )}
                     {item.status === "failed" && item.error && (
                       <p className="text-xs text-rose-600">
@@ -637,16 +695,27 @@ export function OutreachManager({
                             }
                             className="rounded-md bg-rose-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-800 disabled:opacity-60"
                           >
-                            {isBusy ? "Working…" : "Override & send"}
+                            {isBusy ? "Working…" : "Override & schedule"}
                           </button>
                         </>
+                      ) : item.status === "queued" ? (
+                        <button
+                          onClick={() => unschedule(item)}
+                          disabled={isBusy}
+                          className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
+                        >
+                          {isBusy ? "Working…" : "Unschedule"}
+                        </button>
                       ) : (
                         <button
                           onClick={() => send(item)}
-                          disabled={isBusy || !hasEmail || guard.kind === "unavailable"}
+                          disabled={
+                            isBusy || !hasEmail || !isVerified(contact) || guard.kind === "unavailable"
+                          }
+                          title="Puts it in the send queue on the next paced, business-hours slot."
                           className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
                         >
-                          {isBusy ? "Working…" : "Approve & Send"}
+                          {isBusy ? "Working…" : "Approve & schedule"}
                         </button>
                       )}
                       <button

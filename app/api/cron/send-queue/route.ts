@@ -1,17 +1,22 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getEnv } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { sendDueQueued } from "@/lib/outreach/send";
+import { runSendTick } from "@/lib/outreach/send";
+import { scanInboxForReplies } from "@/lib/gmail/replyScan";
 import { kickContext, kickEnrichWorkers } from "@/lib/enrich/queue";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 /**
- * Drains the throttled send queue (see lib/outreach/send.ts). Scheduled every
- * ten minutes in vercel.json so queued emails keep going out after the
- * operator closes the Leads page. Same bearer-secret guard as the follow-up
- * cron; refuses to run without CRON_SECRET.
+ * The send-queue tick. Sends AT MOST ONE email per call (a queued first email
+ * or a follow-up whose slot has come), after the pacing rules in
+ * lib/outreach/schedule.ts and every send-time safety check.
+ *
+ * Triggered every minute by Supabase pg_cron + pg_net (migration 0032): the
+ * Vercel Hobby plan only allows daily crons, so the vercel.json entry is just
+ * a daily safety net. Also runs while the Leads page is open. Bearer
+ * CRON_SECRET required; refuses to run without it.
  */
 export async function GET(request: NextRequest) {
   const secret = getEnv("CRON_SECRET");
@@ -26,13 +31,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Up to 30 per run: at the 1.5s inter-send pause that is well inside the
-  // function limit, and the per-email schedule still governs pacing.
   const admin = createAdminClient();
-  const summary = await sendDueQueued(admin, 30);
+  const minute = new Date().getUTCMinutes();
+  // Every 15 minutes, read new replies first so an organization that just
+  // answered is stopped before its next follow-up slot.
+  const replyScan = minute % 15 === 0 ? await scanInboxForReplies(admin) : undefined;
+  const summary = await runSendTick(admin);
   // Safety net for the contacts + drafts queue: restart workers for any
   // leads left waiting (normally workers chain themselves, see
-  // lib/enrich/queue.ts).
-  const enrichWorkers = await kickEnrichWorkers(admin, kickContext(request.headers));
-  return NextResponse.json({ ok: true, ...summary, enrichWorkers });
+  // lib/enrich/queue.ts). Every ten minutes is plenty.
+  const enrichWorkers =
+    minute % 10 === 0 ? await kickEnrichWorkers(admin, kickContext(request.headers)) : undefined;
+  return NextResponse.json({ ok: true, ...summary, replyScan, enrichWorkers });
 }

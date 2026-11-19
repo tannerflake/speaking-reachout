@@ -1,6 +1,7 @@
 import { getGmailClient } from "@/lib/gmail/send";
 import { withGmailRetry } from "@/lib/gmail/retry";
 import { isAutomatedMessage } from "@/lib/outreach/guard";
+import { looksLikeDeliveryFailure } from "@/lib/gmail/bounce";
 
 export interface ThreadMessage {
   id: string;
@@ -25,10 +26,6 @@ export interface ThreadState {
   references: string[];
 }
 
-function looksLikeBounce(from: string): boolean {
-  const f = from.toLowerCase();
-  return f.includes("mailer-daemon") || f.includes("postmaster");
-}
 
 /**
  * RFC 3834 Auto-Submitted plus the common vendor headers autoresponders set,
@@ -77,7 +74,8 @@ export async function getThreadState(threadId: string): Promise<ThreadState> {
     const isFromUs =
       labels.includes("SENT") ||
       (ours.length > 0 && from.toLowerCase().includes(ours));
-    const isBounce = !isFromUs && looksLikeBounce(from);
+    // Delay warnings ("Delivery Status Notification (Delay)") are not bounces.
+    const isBounce = !isFromUs && looksLikeDeliveryFailure(from, header("Subject"));
     messages.push({
       id: m.id,
       rfcMessageId: header("Message-ID") || null,

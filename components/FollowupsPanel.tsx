@@ -8,7 +8,7 @@ import {
   sendFollowupNow,
 } from "@/app/actions/followups";
 import type { Contact, FollowupSequence } from "@/lib/types";
-import { formatDate } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 
 const STATUS_LABEL: Record<FollowupSequence["status"], string> = {
   active: "Scheduled",
@@ -26,8 +26,9 @@ const STATUS_CLASS: Record<FollowupSequence["status"], string> = {
 
 /**
  * Per-lead view of automated follow-up sequences (one per emailed contact):
- * where each is in the cadence, when the next nudge goes out, and controls
- * to pause, resume, or send now.
+ * where each is in the cadence, the exact slot the next nudge goes out on
+ * (paced with everything else the mailbox sends), and controls to pause,
+ * resume, or move it up to the earliest open slot.
  */
 export function FollowupsPanel({
   sequences,
@@ -62,6 +63,7 @@ export function FollowupsPanel({
       if (res.error) setErr(res.error);
       else if (res.note) setMsg(res.note);
       else if (res.sent) setMsg("Follow-up sent.");
+      else setMsg("Done.");
       router.refresh();
     });
   }
@@ -91,7 +93,7 @@ export function FollowupsPanel({
             <div className="mt-1 text-xs text-zinc-500">
               {s.steps_sent} of {s.max_steps} sent
               {s.status === "active" && s.next_due_at
-                ? ` · next on ${formatDate(s.next_due_at)}`
+                ? ` · next scheduled ${formatDateTime(s.next_due_at)}`
                 : ""}
               {s.status === "stopped" && s.stop_reason
                 ? ` · ${s.stop_reason}`
@@ -110,7 +112,7 @@ export function FollowupsPanel({
                     onClick={() => run(s.id, () => sendFollowupNow(s.id))}
                     className={btn}
                   >
-                    {isBusy ? "Sending…" : "Send next now"}
+                    {isBusy ? "Scheduling…" : "Move up to next open slot"}
                   </button>
                   <button
                     disabled={isBusy}

@@ -6,6 +6,8 @@ import { GmailNotConnectedError } from "@/lib/gmail/send";
 import { classifyReply, type ReplyClassification } from "@/lib/claude/replyClassify";
 import { isAutomatedMessage } from "@/lib/outreach/guard";
 import { stopFollowupsForOrganization } from "@/lib/followups/stop";
+import { classifyBounce } from "@/lib/gmail/bounce";
+import { markAddressBounced } from "@/lib/contacts/deliverability";
 import { orgDomainOfEmail, statusLabel } from "@/lib/utils";
 import type { IngestedMessage, LeadStatus } from "@/lib/types";
 
@@ -51,21 +53,6 @@ interface TrackedThread {
 type Match =
   | { kind: "thread" | "contact"; outreachId: string; leads: TrackedLead[] }
   | { kind: "domain"; outreachId: null; leads: TrackedLead[] };
-
-function isBounce(m: IngestedMessage): boolean {
-  const from = m.from.toLowerCase();
-  const subj = m.subject.toLowerCase();
-  return (
-    from.includes("mailer-daemon") ||
-    from.includes("postmaster") ||
-    subj.includes("delivery status notification") ||
-    subj.includes("undeliverable") ||
-    subj.includes("undelivered mail") ||
-    subj.includes("delivery has failed") ||
-    subj.includes("returned mail") ||
-    subj.includes("failure notice")
-  );
-}
 
 function senderAddress(from: string): string {
   const m = from.match(/<([^>]+)>/);
@@ -183,29 +170,44 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
 
     // 3. Process each new inbound message that belongs to a lead we emailed.
     for (const m of inbound) {
-      const hit = match(m);
-      if (!hit) continue;
-
-      if (isBounce(m)) {
-        // Only a bounce in our own thread tells us which address failed.
-        if (hit.kind !== "thread") continue;
-        bounces += 1;
-        await admin
-          .from("outreach")
-          .update({ bounced_at: new Date().toISOString() })
-          .eq("id", hit.outreachId)
-          .is("bounced_at", null);
-        await admin
-          .from("followup_sequences")
-          .update({ status: "stopped", stop_reason: "Email bounced.", next_due_at: null })
-          .eq("outreach_id", hit.outreachId)
-          .in("status", ["active", "paused"]);
-        await note(
-          hit.leads[0].id,
-          `Delivery failed: an email to ${threads.get(m.threadId)?.contactEmail ?? "the contact"} bounced. Consider re-looking up the address.`,
-        );
+      // Delivery failures first: a bounce is the mail system, never a reply,
+      // and must not mark anyone Interested / Not interested or count as
+      // "already in contact". It is matched by our thread, or by the failed
+      // address when the bounce arrives outside the thread.
+      const bounce = classifyBounce({ from: m.from, subject: m.subject, body: m.body });
+      if (bounce) {
+        const inThread = threads.get(m.threadId);
+        const targets: TrackedThread[] = inThread
+          ? [inThread]
+          : bounce.failedRecipients
+              .map((a) => byContact.get(a))
+              .filter((t): t is TrackedThread => Boolean(t));
+        for (const t of targets) {
+          bounces += 1;
+          await admin
+            .from("outreach")
+            .update({ bounced_at: new Date().toISOString() })
+            .eq("id", t.outreachId)
+            .is("bounced_at", null);
+          await admin
+            .from("followup_sequences")
+            .update({ status: "stopped", stop_reason: "Email bounced.", next_due_at: null })
+            .eq("outreach_id", t.outreachId)
+            .in("status", ["active", "paused"]);
+          if (bounce.hard && t.contactEmail) {
+            await markAddressBounced(admin, t.contactEmail, "permanent delivery failure");
+          } else {
+            await note(
+              t.lead.id,
+              `Delivery to ${t.contactEmail ?? "the contact"} failed temporarily (mailbox full or server busy); follow-ups to them stopped. The address was not marked bad.`,
+            );
+          }
+        }
         continue;
       }
+
+      const hit = match(m);
+      if (!hit) continue;
 
       const fromName = m.from.replace(/\s*<[^>]*>\s*/, "").trim() || m.from;
 

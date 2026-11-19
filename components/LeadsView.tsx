@@ -16,6 +16,7 @@ import {
   DraftGapBadge,
   OriginBadge,
   QueuedBadge,
+  NeedsVerificationBadge,
   SourceBadge,
   StatusBadge,
   TypeBadge,
@@ -41,18 +42,11 @@ import { formatDateTime, statusLabel } from "@/lib/utils";
 import { useInlineConfirm } from "@/components/InlineConfirm";
 import { MultiSelect } from "@/components/MultiSelect";
 
-// Send-queue pacing options offered in the bulk bar (minutes to spread over).
-const SPREAD_OPTIONS = [
-  { value: 5, label: "over 5 min" },
-  { value: 10, label: "over 10 min" },
-  { value: 15, label: "over 15 min" },
-  { value: 30, label: "over 30 min" },
-  { value: 60, label: "over 1 hour" },
-  { value: 120, label: "over 2 hours" },
-];
-
 function clock(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], {
+  const d = new Date(iso);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return d.toLocaleString([], {
+    ...(sameDay ? {} : { weekday: "short", month: "short", day: "numeric" }),
     hour: "numeric",
     minute: "2-digit",
   });
@@ -212,7 +206,6 @@ export function LeadsView({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
-  const [spread, setSpread] = useState<number>(60);
   const [queue, setQueue] = useState<QueueStatus | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   // Leads with client-side work in flight (contact lookup / drafting /
@@ -245,8 +238,9 @@ export function LeadsView({
       const status = await sendQueueStatus();
       setQueue(status);
       if (status.due > 0) {
+        // Fallback for the minute cron: one paced tick (sends at most one).
         const res = await drainSendQueue();
-        if (res.sent || res.failed || res.blocked || res.deferred) {
+        if (res.sent || res.failed || res.blocked || res.deferred || res.held || res.rescheduled) {
           setQueue(await sendQueueStatus());
           if (res.blocked) {
             setMsg(
@@ -572,7 +566,7 @@ export function LeadsView({
 
   /**
    * Get each selected lead to "has contacts and drafts", then queue every
-   * unsent draft, spread over the chosen window. Per lead: no emailable
+   * unsent draft on paced, business-hours slots. Per lead: no emailable
    * contact means find contacts + draft (paid lookups); emailable contacts
    * without a draft means draft only; otherwise it is ready as-is. Leads
    * that already have a sent email are never prepped (the engagement guard
@@ -585,9 +579,6 @@ export function LeadsView({
       if (note) setMsg(`Nothing to send.${note}`);
       return;
     }
-    const label =
-      SPREAD_OPTIONS.find((o) => o.value === spread)?.label ??
-      `over ${spread} min`;
     const toFind = chosen
       .filter((r) => !r.originatedVia && r.emailableContacts === 0)
       .map((r) => r.id);
@@ -608,7 +599,7 @@ export function LeadsView({
     ask(
       `${prepNotes.length ? `First ${prepNotes.join(", then ")}. Then send` : "Send"} every unsent draft on ${ids.length} lead${
         ids.length === 1 ? "" : "s"
-      } from the connected Gmail, spread ${label}? Each email goes to its contact individually and starts its follow-up sequence.`,
+      }? Nothing goes out at once: each email is scheduled on weekday business hours in the recipient's time zone, a few minutes apart (about 20 an hour, 160 a day including follow-ups), with colleagues at the same organization at least 45 minutes apart and spread over up to two days. Unverified addresses are held back.`,
       () => {
         setMsg(null);
         markWorking(toFind, "preparing");
@@ -666,7 +657,7 @@ export function LeadsView({
 
           let res: Awaited<ReturnType<typeof queueSendForLeads>>;
           try {
-            res = await queueSendForLeads(ids, spread);
+            res = await queueSendForLeads(ids);
           } catch (e) {
             setMsg(
               `${prepSummary}Could not queue: ${e instanceof Error ? e.message : "request failed"}${note}`,
@@ -674,31 +665,31 @@ export function LeadsView({
             router.refresh();
             return;
           }
+          const held = [
+            res.needsVerification
+              ? `${res.needsVerification} held: address needs verification (drafts kept)`
+              : "",
+            res.undeliverable ? `${res.undeliverable} not sent: address bounced or invalid` : "",
+            res.needsEdit ? `${res.needsEdit} need an edit first (see the draft's error)` : "",
+            res.blocked
+              ? `${res.blocked} blocked: already in conversation with that organization`
+              : "",
+            res.skipped ? `${res.skipped} skipped for missing email` : "",
+            res.verified ? `${res.verified} address${res.verified === 1 ? "" : "es"} verified just now` : "",
+          ].filter(Boolean);
           if (res.error) {
             setMsg(`${prepSummary}Could not queue: ${res.error}${note}`);
           } else if (res.queued === 0) {
             setMsg(
-              prepSummary +
-                (res.blocked
-                  ? `Nothing queued: ${res.blocked} draft${res.blocked === 1 ? " was" : "s were"} blocked because the organization is already in a conversation${
-                      res.skipped ? `, and ${res.skipped} lack a valid email` : ""
-                    }. Open the lead to see why.`
-                  : `Nothing to send: no unsent drafts with a contact email on the selected leads${
-                      res.skipped
-                        ? ` (${res.skipped} draft${res.skipped === 1 ? "" : "s"} lack a valid email)`
-                        : ""
-                    }.`) +
-                note,
+              `${prepSummary}Nothing queued${held.length ? `: ${held.join("; ")}` : ": no unsent drafts with a contact email on the selected leads"}.${note}`,
             );
           } else {
             setMsg(
-              `${prepSummary}Queued ${res.queued} email${res.queued === 1 ? "" : "s"}; the last one goes out around ${
-                res.finishesAt ? clock(res.finishesAt) : "soon"
-              }${res.skipped ? `. ${res.skipped} skipped for missing email` : ""}${
-                res.blocked
-                  ? `. ${res.blocked} blocked: already in conversation with that organization`
-                  : ""
-              }.${note}`,
+              `${prepSummary}Scheduled ${res.queued} email${res.queued === 1 ? "" : "s"}: first ${
+                res.firstAt ? clock(res.firstAt) : "soon"
+              }, last ${res.finishesAt ? clock(res.finishesAt) : "soon"}. Open a lead to see each send time.${
+                held.length ? ` ${held.join("; ")}.` : ""
+              }${note}`,
             );
           }
           setSelected(new Set());
@@ -847,10 +838,11 @@ export function LeadsView({
       {queue && queue.queued > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-900">
           <span>
-            Sending: {queue.queued} queued
-            {queue.nextDueAt ? `, next at ${clock(queue.nextDueAt)}` : ""}
-            {queue.lastDueAt ? `, done around ${clock(queue.lastDueAt)}` : ""}.
-            Keeps going if you close this page.
+            Scheduled: {queue.queued} email{queue.queued === 1 ? "" : "s"} queued
+            {queue.nextDueAt ? `, next ${clock(queue.nextDueAt)}` : ""}
+            {queue.lastDueAt ? `, last ${clock(queue.lastDueAt)}` : ""}
+            {queue.followupsSoon ? ` (plus ${queue.followupsSoon} follow-up${queue.followupsSoon === 1 ? "" : "s"} in the next day and a half)` : ""}.
+            Sent one at a time in business hours; keeps going if you close this page.
           </span>
           <button
             onClick={runCancelQueue}
@@ -904,28 +896,14 @@ export function LeadsView({
                 ? "Working…"
                 : `Find Contacts + Draft for ${selected.size}`}
             </button>
-            <span className="inline-flex items-center overflow-hidden rounded-md border border-emerald-600">
-              <button
-                onClick={runBulkSend}
-                disabled={pending}
-                className="bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-              >
-                {pending ? "Working…" : `Prepare + Send for ${selected.size}`}
-              </button>
-              <select
-                value={spread}
-                onChange={(e) => setSpread(Number(e.target.value))}
-                disabled={pending}
-                aria-label="Spread sends over"
-                className="border-l border-emerald-700 bg-emerald-50 px-2 py-1.5 text-sm text-emerald-900 focus:outline-none"
-              >
-                {SPREAD_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </span>
+            <button
+              onClick={runBulkSend}
+              disabled={pending}
+              title="Schedules each email on paced, business-hours slots; nothing goes out at once."
+              className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+            >
+              {pending ? "Working…" : `Prepare + Schedule for ${selected.size}`}
+            </button>
           </div>
         </div>
       )}
@@ -1023,7 +1001,8 @@ export function LeadsView({
                         {r.name}
                       </Link>
                       <WorkingBadge kind={working.get(r.id)} />
-                      <QueuedBadge count={r.queuedCount} />
+                      <QueuedBadge count={r.queuedCount} nextAt={r.nextScheduledAt} />
+                      <NeedsVerificationBadge count={r.needsVerificationCount} />
                       <SourceBadge source={r.source} />
                     </div>
                   </td>

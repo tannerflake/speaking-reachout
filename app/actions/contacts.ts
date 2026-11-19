@@ -364,3 +364,35 @@ export async function setContactEmail(
   revalidatePath(`/admin/leads/${leadId}`);
   return {};
 }
+
+/**
+ * Operator confirms an address they checked themselves (e.g. on the org's
+ * staff page). The only manual way past the "needs verification" hold.
+ */
+export async function markContactVerified(contactId: string): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("contacts")
+    .select("lead_id, email, contact_status")
+    .eq("id", contactId)
+    .single();
+  if (!data) return { error: "Contact not found." };
+  const row = data as { lead_id: string; email: string | null; contact_status: string };
+  if (row.contact_status === "bounced" || row.contact_status === "invalid") {
+    return { error: "This address bounced or failed verification; set a different email instead." };
+  }
+  if (!looksLikeRealEmail(row.email)) return { error: "This contact has no valid email." };
+  const { error } = await supabase
+    .from("contacts")
+    .update({ contact_status: "verified" })
+    .eq("id", contactId);
+  if (error) return { error: error.message };
+  await supabase.from("interactions").insert({
+    lead_id: row.lead_id,
+    kind: "note",
+    detail: `${row.email} marked verified by hand.`,
+  });
+  revalidatePath(`/admin/leads/${row.lead_id}`);
+  revalidatePath("/admin/leads");
+  return {};
+}

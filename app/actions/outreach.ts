@@ -7,19 +7,17 @@ import { generateOutreach } from "@/lib/claude/outreach";
 import { draftAllForLead, draftingBlocked } from "@/lib/outreach/draft";
 import {
   getQueueStatus,
-  queueOutreachForLeads,
-  sendDueQueued,
-  sendOutreachRow,
-  type DrainResult,
+  queueOutreach,
+  runSendTick,
   type QueueResult,
   type QueueStatus,
+  type TickResult,
 } from "@/lib/outreach/send";
 import {
   checkEngagementGuard,
-  guardBatch,
   type EngagementGuardResult,
 } from "@/lib/outreach/guard";
-import { looksLikeRealEmail, pickPrimaryContact } from "@/lib/utils";
+import { pickPrimaryContact } from "@/lib/utils";
 import type { Contact, Outreach } from "@/lib/types";
 
 export interface DraftResult {
@@ -157,19 +155,39 @@ export async function regenerateDraft(
   }
 }
 
-export async function approveAndSend(
-  outreachId: string,
-  /** Set by "Approve & send all": the org's mailbox check runs once per batch. */
-  batchId?: string,
-): Promise<{ error?: string; ok?: boolean; blocked?: boolean }> {
+/**
+ * Approve drafts for sending: they go into the send queue with scheduled
+ * times (weekday business hours in the recipient's zone, paced, colleagues
+ * spread out). Nothing leaves immediately. Unverified addresses are held.
+ */
+export async function approveAndSchedule(
+  outreachIds: string[],
+): Promise<QueueResult> {
   const supabase = await createClient();
-  const res = await sendOutreachRow(supabase, outreachId, {
-    guardBatch: batchId ? guardBatch(batchId) : undefined,
-  });
-  if (res.leadId) revalidatePath(`/admin/leads/${res.leadId}`);
+  const res = await queueOutreach(supabase, { outreachIds });
+  const { data } = await supabase.from("outreach").select("lead_id").in("id", outreachIds);
+  for (const leadId of new Set(((data ?? []) as Array<{ lead_id: string }>).map((r) => r.lead_id))) {
+    revalidatePath(`/admin/leads/${leadId}`);
+  }
   revalidatePath("/admin/leads");
   revalidatePath("/admin");
-  return res.ok ? { ok: true } : { error: res.error, blocked: res.blocked };
+  return res;
+}
+
+/** Take one queued email back out of the queue (back to draft). */
+export async function unscheduleOutreach(outreachId: string): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("outreach")
+    .update({ status: "draft", scheduled_for: null })
+    .eq("id", outreachId)
+    .eq("status", "queued")
+    .select("lead_id");
+  if (error) return { error: error.message };
+  const leadId = (data as Array<{ lead_id: string }> | null)?.[0]?.lead_id;
+  if (leadId) revalidatePath(`/admin/leads/${leadId}`);
+  revalidatePath("/admin/leads");
+  return {};
 }
 
 /** The engagement guard's verdict for a lead, for the lead page banner. */
@@ -226,33 +244,42 @@ export async function overrideAndSend(
     kind: "note",
     detail: `Engagement guard overridden by the operator for one draft: ${trimmed}`,
   });
-  return approveAndSend(outreachId);
+  // Even an override goes out on a paced slot, never instantly.
+  const res = await approveAndSchedule([outreachId]);
+  if (res.error) return { error: res.error };
+  if (res.queued === 0) {
+    return {
+      error:
+        res.needsVerification > 0
+          ? "Not queued: this address needs verification first."
+          : "Not queued: check the draft's error message.",
+    };
+  }
+  return { ok: true };
 }
 
 /**
- * Bulk send, throttled. Queues every unsent draft with a valid email on the
- * selected leads, spread over `spreadMinutes` (about one a minute by
- * default), then returns immediately. The Leads page drains the queue while
- * it is open and /api/cron/send-queue picks up the rest. EXPLICIT,
+ * Bulk send from the Leads page. Queues every unsent draft with a verified
+ * contact email on the selected leads, each on its own scheduled slot (see
+ * lib/outreach/schedule.ts), then returns immediately. The minute tick
+ * (/api/cron/send-queue) sends them one at a time. EXPLICIT,
  * operator-confirmed.
  */
-export async function queueSendForLeads(
-  leadIds: string[],
-  spreadMinutes: number,
-): Promise<QueueResult> {
+export async function queueSendForLeads(leadIds: string[]): Promise<QueueResult> {
   const supabase = await createClient();
-  const res = await queueOutreachForLeads(supabase, leadIds, spreadMinutes);
+  const res = await queueOutreach(supabase, { leadIds });
   revalidatePath("/admin/leads");
   return res;
 }
 
-/** Send whatever is due in the queue (called by the Leads page while open). */
-export async function drainSendQueue(): Promise<DrainResult> {
+/**
+ * Run one queue tick (the Leads page calls this while open, as a fallback for
+ * the minute cron). Sends at most one email, and only if the pacing allows.
+ */
+export async function drainSendQueue(): Promise<TickResult> {
   const supabase = await createClient();
-  // Small batches: this runs inside a page request, which has a much shorter
-  // time limit than the cron route. The 20s poll picks up the rest.
-  const res = await sendDueQueued(supabase, 3);
-  if (res.sent || res.failed) {
+  const res = await runSendTick(supabase);
+  if (res.sent || res.failed || res.blocked || res.followupsSent) {
     revalidatePath("/admin/leads");
     revalidatePath("/admin");
   }
@@ -313,37 +340,14 @@ export async function draftForAllContacts(
 }
 
 /**
- * Send every unsent draft on a lead that has a valid contact email, one Gmail
- * message per recipient (never CC'd together). EXPLICIT, operator-confirmed.
+ * Schedule every unsent draft on a lead (one Gmail message per recipient,
+ * never CC'd together, colleagues spread at least 45 minutes apart).
+ * EXPLICIT, operator-confirmed.
  */
-export async function sendAllDrafts(
-  leadId: string,
-): Promise<{ sent: number; failed: number; errors: string[] }> {
+export async function sendAllDrafts(leadId: string): Promise<QueueResult> {
   const supabase = await createClient();
-  const { data } = await supabase
-    .from("outreach")
-    .select("id, status, contact:contacts(email)")
-    .eq("lead_id", leadId)
-    .in("status", ["draft", "failed"]);
-
-  const rows =
-    (data as Array<{ id: string; contact: { email: string | null } | null }> | null) ??
-    [];
-  const ready = rows.filter((r) => looksLikeRealEmail(r.contact?.email));
-
-  let sent = 0;
-  let failed = 0;
-  const errors: string[] = [];
-  const batchId = crypto.randomUUID();
-  for (const [i, row] of ready.entries()) {
-    if (i > 0) await new Promise((r) => setTimeout(r, 1500));
-    const res = await approveAndSend(row.id, batchId);
-    if (res.error) {
-      failed += 1;
-      errors.push(`${row.contact?.email}: ${res.error}`);
-    } else {
-      sent += 1;
-    }
-  }
-  return { sent, failed, errors };
+  const res = await queueOutreach(supabase, { leadIds: [leadId] });
+  revalidatePath(`/admin/leads/${leadId}`);
+  revalidatePath("/admin/leads");
+  return res;
 }

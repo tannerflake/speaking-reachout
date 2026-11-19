@@ -2,7 +2,27 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { GmailNotConnectedError, sendGmail } from "@/lib/gmail/send";
 import { getOutreachOnePager } from "@/lib/gmail/attachments";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { startSequence } from "@/lib/followups/run";
+import {
+  newFollowupContext,
+  sendFollowupForSequence,
+  startSequence,
+  type FollowupContext,
+} from "@/lib/followups/run";
+import {
+  holdMessage,
+  sendHoldReason,
+  verifyContactIfPossible,
+} from "@/lib/contacts/deliverability";
+import { attachOnePager, plainEmailProblem } from "@/lib/outreach/plainEmail";
+import { sendNowVerdict } from "@/lib/outreach/schedule";
+import {
+  acquireSendLock,
+  loadSendLedger,
+  orgKeysFor,
+  takeSlot,
+  tzOfLead,
+  type SendLedger,
+} from "@/lib/outreach/slots";
 import {
   EngagementGuardUnavailableError,
   checkEngagementGuard,
@@ -35,6 +55,8 @@ export interface SendRowResult {
   /** The guard could not run (mailbox unavailable); nothing was sent and the
    * row was left as it was so it can be retried. */
   deferred?: boolean;
+  /** The address needs verification first; the draft was kept, not sent. */
+  held?: boolean;
 }
 
 /**
@@ -85,6 +107,31 @@ export async function sendOutreachRow(
       error:
         "No valid contact email on this outreach. Resolve the contact's email before sending.",
       leadId: row.lead_id,
+    };
+  }
+
+  // BOUNCE PROTECTION. Only verified addresses are emailed; a guessed one is
+  // held (draft kept), a bounced or invalid one is refused for good. Checked
+  // here as well as at queue time: the contact can change while queued.
+  let hold = sendHoldReason(row.contact);
+  if (hold === "needs_verification" && row.contact) {
+    const status = await verifyContactIfPossible(db, row.contact);
+    hold = sendHoldReason({ email, contact_status: status });
+  }
+  if (hold) {
+    const message = holdMessage(hold, email);
+    await db
+      .from("outreach")
+      .update({
+        status: hold === "needs_verification" ? "draft" : "failed",
+        error: message,
+        scheduled_for: null,
+      })
+      .eq("id", outreachId);
+    return {
+      error: message,
+      leadId: row.lead_id,
+      held: hold === "needs_verification",
     };
   }
 
@@ -176,16 +223,27 @@ export async function sendOutreachRow(
     body = withHonorarium;
   }
 
+  // Plain and personal: no shorteners, no HTML, few links, no promised
+  // attachment that isn't there.
+  const plainProblem = plainEmailProblem(body, { firstEmail: (row.sequence_step ?? 0) === 0 });
+  if (plainProblem) {
+    await db
+      .from("outreach")
+      .update({ status: "failed", error: plainProblem, scheduled_for: null })
+      .eq("id", outreachId);
+    return { error: plainProblem, leadId: row.lead_id };
+  }
+
   try {
-    // Every initial outreach carries the one-page speaking overview; the
-    // email copy refers to it, so sending without it would be a broken
-    // promise. Follow-ups (lib/followups/run.ts) deliberately do not.
-    const onePager = await getOutreachOnePager();
+    // No attachment: a PDF from a stranger is one of the strongest spam
+    // signals. OUTREACH_ATTACH_ONE_PAGER=true restores the old one-pager.
+    const attachments =
+      (row.sequence_step ?? 0) === 0 && attachOnePager() ? [await getOutreachOnePager()] : [];
     const result = await sendGmail({
       to: email as string,
       subject: row.subject,
       body,
-      attachments: [onePager],
+      attachments,
     });
 
     const sentAt = new Date().toISOString();
@@ -222,16 +280,17 @@ export async function sendOutreachRow(
     // nudges in the same thread; see lib/followups/cadence.ts). Follow-ups
     // themselves (sequence_step > 0) never start a new sequence.
     if ((row.sequence_step ?? 0) === 0) {
-      await startSequence(createAdminClient(), {
-        id: row.id,
-        lead_id: row.lead_id,
-        contact_id: row.contact_id,
-        sent_at: sentAt,
-      });
+      const firstAt = await startSequence(
+        createAdminClient(),
+        { id: row.id, lead_id: row.lead_id, contact_id: row.contact_id, sent_at: sentAt },
+        { email },
+      );
       await db.from("interactions").insert({
         lead_id: row.lead_id,
         kind: "note",
-        detail: `Follow-ups scheduled for ${email}: 3 nudges in the same thread, roughly days 4, 11, and 21, unless they reply first.`,
+        detail: `Follow-ups scheduled for ${email}: 3 nudges in the same thread, roughly days 4, 11, and 21, unless they reply first${
+          firstAt ? `; the first is set for ${new Date(firstAt).toUTCString()}` : ""
+        }.`,
       });
     }
 
@@ -251,79 +310,151 @@ export async function sendOutreachRow(
   }
 }
 
-// --- Throttled queue ---------------------------------------------------------
 
-/** Minimum gap between two queued sends, whatever spread was asked for. */
-export const MIN_GAP_SECONDS = 20;
-/** Default pace: about one email a minute. */
-export const DEFAULT_GAP_SECONDS = 60;
-/**
- * Safety cap on queued sends per rolling 24 hours. Google Workspace allows
- * 2,000 a day; staying far below keeps the account off the radar.
- */
-export const DAILY_SEND_CAP = 300;
+// --- Scheduled queue ---------------------------------------------------------
+//
+// Nothing is sent the moment it is approved. Approving (one draft, a lead's
+// "send all", or the Leads page bulk send) puts each email in the queue with
+// a scheduled time picked by lib/outreach/schedule.ts: weekday business hours
+// in the recipient's time zone, 2-6 minutes between any two sends, hourly and
+// daily caps, and colleagues at one organization at least 45 minutes apart.
+// A tick (runSendTick) runs every minute and sends at most one email.
 
 export interface QueueResult {
   queued: number;
+  /** No usable email address at all. */
   skipped: number;
   /** Drafts refused by the engagement guard (org already in conversation). */
   blocked: number;
+  /** Guessed / unconfirmed addresses held back; their drafts are kept. */
+  needsVerification: number;
+  /** Addresses that bounced or the verifier rejected; never sent. */
+  undeliverable: number;
+  /** Addresses the verifier confirmed during this queueing run. */
+  verified: number;
+  /** Drafts that need an edit first (attachment promise, shortener, links). */
+  needsEdit: number;
+  firstAt: string | null;
   finishesAt: string | null;
   error?: string;
 }
 
+const EMPTY_QUEUE: QueueResult = {
+  queued: 0,
+  skipped: 0,
+  blocked: 0,
+  needsVerification: 0,
+  undeliverable: 0,
+  verified: 0,
+  needsEdit: 0,
+  firstAt: null,
+  finishesAt: null,
+};
+
+type QueueRow = {
+  id: string;
+  lead_id: string;
+  body: string;
+  sequence_step: number | null;
+  guard_override_at: string | null;
+  contact: Contact | null;
+  lead: { location_region: string | null; location_country: string | null } | null;
+};
+
 /**
- * Put every unsent draft (draft or failed) with a valid contact email on the
- * given leads into the send queue, spread evenly over `spreadMinutes` with a
- * little jitter so sends don't land on a metronome. Nothing is sent here.
+ * Put unsent drafts (draft or failed) into the send queue with scheduled
+ * times. Select by lead (bulk send, a lead's "send all") or by outreach id (a
+ * single approval). Holds back unverified addresses (verifying them first when
+ * a verifier is configured), refuses bounced ones, and runs the engagement
+ * guard preflight. Nothing is sent here.
  */
-export async function queueOutreachForLeads(
+export async function queueOutreach(
   db: Db,
-  leadIds: string[],
-  spreadMinutes: number,
+  select: { leadIds?: string[]; outreachIds?: string[] },
 ): Promise<QueueResult> {
-  if (leadIds.length === 0) return { queued: 0, skipped: 0, blocked: 0, finishesAt: null };
+  const leadIds = select.leadIds ?? [];
+  const outreachIds = select.outreachIds ?? [];
+  if (leadIds.length === 0 && outreachIds.length === 0) return { ...EMPTY_QUEUE };
 
-  const { data, error } = await db
+  let q = db
     .from("outreach")
-    .select("id, lead_id, guard_override_at, contact:contacts(email)")
-    .in("lead_id", leadIds)
+    .select(
+      "id, lead_id, body, sequence_step, guard_override_at, contact:contacts(*), lead:leads(location_region, location_country)",
+    )
     .in("status", ["draft", "failed"]);
-  if (error) return { queued: 0, skipped: 0, blocked: 0, finishesAt: null, error: error.message };
+  q = outreachIds.length ? q.in("id", outreachIds) : q.in("lead_id", leadIds);
+  const { data, error } = await q;
+  if (error) return { ...EMPTY_QUEUE, error: error.message };
 
-  // Supabase types the to-one join as an array; it is a single object at runtime.
-  type Row = {
-    id: string;
-    lead_id: string;
-    guard_override_at: string | null;
-    contact: { email: string | null } | { email: string | null }[] | null;
-  };
-  const rows = ((data as unknown as Row[] | null) ?? []).map((r) => ({
+  const one = <T,>(v: T | T[] | null): T | null => (Array.isArray(v) ? (v[0] ?? null) : v);
+  const rows = ((data as unknown as QueueRow[] | null) ?? []).map((r) => ({
     ...r,
-    contact: Array.isArray(r.contact) ? (r.contact[0] ?? null) : r.contact,
+    contact: one(r.contact as Contact | Contact[] | null),
+    lead: one(r.lead as QueueRow["lead"] | QueueRow["lead"][] | null),
   }));
-  const withEmail = rows.filter((r) => looksLikeRealEmail(r.contact?.email));
-  const skipped = rows.length - withEmail.length;
+  const result: QueueResult = { ...EMPTY_QUEUE };
 
-  // Engagement guard preflight (CRM only; the mailbox is checked again at
+  // 1. Deliverability: verified addresses only.
+  const verifiedNow = new Map<string, Contact["contact_status"]>();
+  const deliverable: typeof rows = [];
+  for (const r of rows) {
+    let hold = sendHoldReason(r.contact);
+    if (hold === "needs_verification" && r.contact) {
+      let status = verifiedNow.get(r.contact.id);
+      if (!status) {
+        status = await verifyContactIfPossible(db, r.contact);
+        verifiedNow.set(r.contact.id, status);
+        if (status === "verified") result.verified += 1;
+      }
+      hold = sendHoldReason({ email: r.contact.email, contact_status: status });
+    }
+    if (!hold) {
+      deliverable.push(r);
+      continue;
+    }
+    if (hold === "no_email") result.skipped += 1;
+    else if (hold === "needs_verification") result.needsVerification += 1;
+    else {
+      result.undeliverable += 1;
+      await db
+        .from("outreach")
+        .update({ status: "failed", error: holdMessage(hold, r.contact?.email) })
+        .eq("id", r.id);
+    }
+  }
+
+  // 2. Plain-email check, so a draft that would be refused at send time is
+  // flagged now instead of silently failing later in the day.
+  const plain: typeof rows = [];
+  for (const r of deliverable) {
+    const problem = plainEmailProblem(r.body, { firstEmail: (r.sequence_step ?? 0) === 0 });
+    if (problem) {
+      result.needsEdit += 1;
+      await db.from("outreach").update({ status: "failed", error: problem }).eq("id", r.id);
+    } else plain.push(r);
+  }
+
+  // 3. Engagement guard preflight (CRM only; the mailbox is checked again at
   // send time). Blocked drafts are parked now so the operator sees it at
   // once instead of discovering it in the queue later.
-  let blocked = 0;
-  const ready: typeof withEmail = [];
+  const ready: typeof rows = [];
   const verdicts = new Map<string, { blocked: boolean; reason: string }>();
-  // Leads already flagged stay out, whatever today's check says.
-  const { data: flagged } = await db
-    .from("leads")
-    .select("id")
-    .in("id", leadIds)
-    .eq("status", "blocked");
-  for (const l of (flagged ?? []) as Array<{ id: string }>) {
-    verdicts.set(l.id, {
-      blocked: true,
-      reason: "Already in contact: this lead was flagged by the engagement guard.",
-    });
+  const plainLeadIds = [...new Set(plain.map((r) => r.lead_id))];
+  if (plainLeadIds.length) {
+    // Leads already flagged stay out, whatever today's check says.
+    const { data: flagged } = await db
+      .from("leads")
+      .select("id")
+      .in("id", plainLeadIds)
+      .eq("status", "blocked");
+    for (const l of (flagged ?? []) as Array<{ id: string }>) {
+      verdicts.set(l.id, {
+        blocked: true,
+        reason: "Already in contact: this lead was flagged by the engagement guard.",
+      });
+    }
   }
-  for (const r of withEmail) {
+  for (const r of plain) {
     if (r.guard_override_at) {
       ready.push(r);
       continue;
@@ -335,7 +466,7 @@ export async function queueOutreachForLeads(
       verdicts.set(r.lead_id, v);
     }
     if (v.blocked) {
-      blocked += 1;
+      result.blocked += 1;
       await markBlocked(db, r.id, r.lead_id, v.reason);
       await db.from("interactions").insert({
         lead_id: r.lead_id,
@@ -346,128 +477,283 @@ export async function queueOutreachForLeads(
       ready.push(r);
     }
   }
-  if (ready.length === 0) return { queued: 0, skipped, blocked, finishesAt: null };
+  if (ready.length === 0) return result;
 
-  // Start after whatever is already queued so two batches don't overlap.
-  const { data: tail } = await db
-    .from("outreach")
-    .select("scheduled_for")
-    .eq("status", "queued")
-    .order("scheduled_for", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const tailAt = (tail as { scheduled_for: string | null } | null)?.scheduled_for;
-  const start = Math.max(Date.now(), tailAt ? new Date(tailAt).getTime() + MIN_GAP_SECONDS * 1000 : 0);
+  // 4. Schedule. Round-robin across organizations (everyone's first contact,
+  // then everyone's second, ...) so the day interleaves orgs; the allocator
+  // still enforces spacing and per-org caps.
+  let ledger: SendLedger;
+  try {
+    ledger = await loadSendLedger(db);
+  } catch (e) {
+    return { ...result, error: e instanceof Error ? e.message : "Could not load the schedule." };
+  }
+  const byLead = new Map<string, typeof rows>();
+  for (const r of ready) byLead.set(r.lead_id, [...(byLead.get(r.lead_id) ?? []), r]);
+  const ordered: typeof rows = [];
+  for (let i = 0; ordered.length < ready.length; i += 1) {
+    for (const list of byLead.values()) if (list[i]) ordered.push(list[i]);
+  }
 
-  const gapMs = Math.max(
-    MIN_GAP_SECONDS * 1000,
-    Math.floor((Math.max(1, spreadMinutes) * 60 * 1000) / ready.length),
-  );
-
-  let last = start;
-  for (let i = 0; i < ready.length; i += 1) {
-    const jitter = Math.floor(Math.random() * gapMs * 0.3);
-    const at = i === 0 ? start : last + gapMs + jitter;
-    last = at;
+  const earliest = Date.now() + 2 * 60_000;
+  let first = Infinity;
+  let last = 0;
+  for (const r of ordered) {
+    const at = takeSlot(
+      ledger,
+      {
+        kind: "outreach",
+        id: r.id,
+        leadId: r.lead_id,
+        email: r.contact?.email ?? null,
+        tz: tzOfLead(r.lead),
+      },
+      earliest,
+    );
+    first = Math.min(first, at);
+    last = Math.max(last, at);
     await db
       .from("outreach")
       .update({ status: "queued", scheduled_for: new Date(at).toISOString(), error: null })
-      .eq("id", ready[i].id);
+      .eq("id", r.id);
+    result.queued += 1;
   }
-
-  return { queued: ready.length, skipped, blocked, finishesAt: new Date(last).toISOString() };
+  return {
+    ...result,
+    firstAt: new Date(first).toISOString(),
+    finishesAt: new Date(last).toISOString(),
+  };
 }
 
-export interface DrainResult {
+/** Back-compat wrapper for the Leads page bulk send. */
+export function queueOutreachForLeads(db: Db, leadIds: string[]): Promise<QueueResult> {
+  return queueOutreach(db, { leadIds });
+}
+
+export interface TickResult {
   sent: number;
   failed: number;
   /** Refused by the engagement guard (parked as blocked, not retried). */
   blocked: number;
   /** Left queued because the mailbox could not be checked; retried later. */
   deferred: number;
+  /** Pulled back to draft: the address needs verification. */
+  held: number;
+  /** Due items moved to a new slot (outside hours, a cap, org spacing). */
+  rescheduled: number;
+  followupsSent: number;
+  followupsStopped: number;
   remaining: number;
   nextDueAt: string | null;
-  capped: boolean;
+  /** Another tick was already running; this one did nothing. */
+  busy: boolean;
+  /** Why nothing went out on this tick, when something was due. */
+  waiting: string | null;
   errors: string[];
 }
 
+type DueItem = {
+  kind: "outreach" | "followup";
+  id: string;
+  leadId: string;
+  due: string;
+  email: string | null;
+  tz: string;
+};
+
 /**
- * Send every queued email whose time has come, oldest first, up to `limit`
- * per call so a single invocation stays well inside function time limits.
- * Safe to call from anywhere, as often as you like: the Leads page polls it
- * while open, and the cron route calls it on a schedule.
+ * One pass of the send queue: look at everything due (queued first emails and
+ * follow-ups whose time has come) and send AT MOST `maxSends` of them, after
+ * checking the pacing rules against what has actually gone out. Due items that
+ * can't go now because of the clock (outside the recipient's hours, a daily
+ * cap, a colleague emailed minutes ago) get a fresh slot; items held only by
+ * the 2-minute gap or the hourly cap simply wait for the next tick.
+ *
+ * Every send goes through the full checks: engagement guard (with the live
+ * mailbox), duplicate-first-email refusal, verification, Gmail quota backoff.
  */
-export async function sendDueQueued(db: Db, limit = 10): Promise<DrainResult> {
-  const nowIso = new Date().toISOString();
-  const errors: string[] = [];
-  let sent = 0;
-  let failed = 0;
-  let blocked = 0;
-  let deferred = 0;
-  let capped = false;
+export async function runSendTick(db: Db, opts: { maxSends?: number } = {}): Promise<TickResult> {
+  const maxSends = opts.maxSends ?? 1;
+  const out: TickResult = {
+    sent: 0,
+    failed: 0,
+    blocked: 0,
+    deferred: 0,
+    held: 0,
+    rescheduled: 0,
+    followupsSent: 0,
+    followupsStopped: 0,
+    remaining: 0,
+    nextDueAt: null,
+    busy: false,
+    waiting: null,
+    errors: [],
+  };
 
-  // Rolling daily cap.
-  const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-  const { count: sentToday } = await db
-    .from("outreach")
-    .select("id", { count: "exact", head: true })
-    .eq("status", "sent")
-    .gte("sent_at", since);
-  const room = Math.max(0, DAILY_SEND_CAP - (sentToday ?? 0));
-
-  if (room > 0) {
-    // One mailbox search per organization for this drain.
-    const guardBatch = newGuardBatch();
-    const { data } = await db
-      .from("outreach")
-      .select("id")
-      .eq("status", "queued")
-      .lte("scheduled_for", nowIso)
-      .order("scheduled_for", { ascending: true })
-      .limit(Math.min(limit, room));
-    for (const row of (data as Array<{ id: string }> | null) ?? []) {
-      // Claim the row before sending. Several drainers run at once (the Leads
-      // page poll, the cron, a second open tab) and without this two of them
-      // can pick up the same due row and the recipient gets the email twice.
-      // The conditional update is atomic: only one caller sees a row back.
-      // If this process dies mid-send the row becomes due again in an hour.
-      const { data: claimed } = await db
+  const release = await acquireSendLock(db);
+  if (!release) return { ...out, busy: true, ...(await queueTail(db)) };
+  try {
+    const nowIso = new Date().toISOString();
+    type Row = {
+      id: string;
+      lead_id: string;
+      due: string;
+      contact: { email: string | null } | { email: string | null }[] | null;
+      lead:
+        | { location_region: string | null; location_country: string | null }
+        | { location_region: string | null; location_country: string | null }[]
+        | null;
+    };
+    const [queuedRes, seqRes] = await Promise.all([
+      db
         .from("outreach")
-        .update({ scheduled_for: new Date(Date.now() + 60 * 60 * 1000).toISOString() })
-        .eq("id", row.id)
+        .select("id, lead_id, due:scheduled_for, contact:contacts(email), lead:leads(location_region, location_country)")
         .eq("status", "queued")
         .lte("scheduled_for", nowIso)
-        .select("id");
-      if (!claimed || claimed.length === 0) continue;
+        .order("scheduled_for", { ascending: true })
+        .limit(25),
+      db
+        .from("followup_sequences")
+        .select("id, lead_id, due:next_due_at, contact:contacts(email), lead:leads(location_region, location_country)")
+        .eq("status", "active")
+        .lte("next_due_at", nowIso)
+        .order("next_due_at", { ascending: true })
+        .limit(25),
+    ]);
+    if (queuedRes.error) throw new Error(queuedRes.error.message);
+    if (seqRes.error) throw new Error(seqRes.error.message);
+    const toItem = (kind: DueItem["kind"]) => (r: Row): DueItem => {
+      const contact = Array.isArray(r.contact) ? (r.contact[0] ?? null) : r.contact;
+      return { kind, id: r.id, leadId: r.lead_id, due: r.due, email: contact?.email ?? null, tz: tzOfLead(r.lead) };
+    };
+    const due = [
+      ...((queuedRes.data ?? []) as unknown as Row[]).map(toItem("outreach")),
+      ...((seqRes.data ?? []) as unknown as Row[]).map(toItem("followup")),
+    ].sort((a, b) => a.due.localeCompare(b.due));
+    if (due.length === 0) return { ...out, ...(await queueTail(db)) };
 
-      const res = await sendOutreachRow(db, row.id, { guardBatch });
-      if (res.ok) sent += 1;
-      else if (res.blocked) {
-        blocked += 1;
-        if (res.error) errors.push(res.error);
-      } else if (res.deferred) {
-        // Keep it queued, but not due again for ten minutes, so a mailbox
-        // hiccup doesn't spin on the same row.
-        deferred += 1;
-        await db
-          .from("outreach")
-          .update({ scheduled_for: new Date(Date.now() + 10 * 60 * 1000).toISOString() })
-          .eq("id", row.id)
-          .eq("status", "queued");
-        if (res.error) errors.push(res.error);
-        break; // the mailbox is unavailable; the rest will fail the same way
-      } else {
-        failed += 1;
-        if (res.error) errors.push(res.error);
+    const ledger = await loadSendLedger(db);
+    const guardBatch = newGuardBatch();
+    let followupCtx: FollowupContext | null = null;
+    let sends = 0;
+
+    for (const item of due) {
+      const orgKeys = orgKeysFor(item.leadId, item.email);
+      const verdict = sendNowVerdict(Date.now(), item.tz, orgKeys, ledger.sent);
+
+      if (!verdict.ok) {
+        if (verdict.action === "wait") {
+          out.waiting ??= verdict.reason;
+          continue;
+        }
+        const at = takeSlot(ledger, item, Date.now() + 60_000);
+        await moveItem(db, item, at);
+        out.rescheduled += 1;
+        continue;
       }
-      // A short breath between sends inside one call.
-      await new Promise((r) => setTimeout(r, 1500));
-    }
-  } else {
-    capped = true;
-  }
+      if (sends >= maxSends) {
+        out.waiting ??= "One email per tick; the rest go out on the next ticks.";
+        continue;
+      }
 
-  const { count: remaining } = await db
+      // Claim before sending: several tick sources can race (the lock covers
+      // most of it; this covers the database without migration 0031). If this
+      // process dies mid-send the item becomes due again in an hour.
+      const claimed = await claimItem(db, item, nowIso);
+      if (!claimed) continue;
+
+      if (item.kind === "outreach") {
+        const res = await sendOutreachRow(db, item.id, { guardBatch });
+        if (res.ok) {
+          out.sent += 1;
+          sends += 1;
+          ledger.sent.push({ at: Date.now(), orgKeys });
+        } else if (res.blocked) {
+          out.blocked += 1;
+          if (res.error) out.errors.push(res.error);
+        } else if (res.held) {
+          out.held += 1;
+          if (res.error) out.errors.push(res.error);
+        } else if (res.deferred) {
+          // Keep it queued, not due again for ten minutes, so a mailbox hiccup
+          // doesn't spin on the same row.
+          out.deferred += 1;
+          await db
+            .from("outreach")
+            .update({ scheduled_for: new Date(Date.now() + 10 * 60_000).toISOString() })
+            .eq("id", item.id)
+            .eq("status", "queued");
+          if (res.error) out.errors.push(res.error);
+          break; // the mailbox is unavailable; the rest would fail the same way
+        } else {
+          out.failed += 1;
+          if (res.error) out.errors.push(res.error);
+        }
+      } else {
+        followupCtx ??= await newFollowupContext(createAdminClient(), guardBatch);
+        try {
+          const outcome = await sendFollowupForSequence(createAdminClient(), item.id, followupCtx);
+          if (outcome === "sent") {
+            out.followupsSent += 1;
+            sends += 1;
+            ledger.sent.push({ at: Date.now(), orgKeys });
+          } else if (outcome === "stopped") out.followupsStopped += 1;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Follow-up failed.";
+          out.errors.push(msg);
+          // Try again in 15 minutes rather than an hour.
+          await createAdminClient()
+            .from("followup_sequences")
+            .update({ last_error: msg, next_due_at: new Date(Date.now() + 15 * 60_000).toISOString() })
+            .eq("id", item.id)
+            .eq("status", "active");
+          if (/mailbox|gmail|connect/i.test(msg)) break;
+        }
+      }
+    }
+    return { ...out, ...(await queueTail(db)) };
+  } finally {
+    await release();
+  }
+}
+
+async function claimItem(db: Db, item: DueItem, nowIso: string): Promise<boolean> {
+  const later = new Date(Date.now() + 60 * 60_000).toISOString();
+  if (item.kind === "outreach") {
+    const { data } = await db
+      .from("outreach")
+      .update({ scheduled_for: later })
+      .eq("id", item.id)
+      .eq("status", "queued")
+      .lte("scheduled_for", nowIso)
+      .select("id");
+    return Boolean(data && data.length);
+  }
+  const { data } = await createAdminClient()
+    .from("followup_sequences")
+    .update({ next_due_at: later })
+    .eq("id", item.id)
+    .eq("status", "active")
+    .lte("next_due_at", nowIso)
+    .select("id");
+  return Boolean(data && data.length);
+}
+
+async function moveItem(db: Db, item: DueItem, at: number): Promise<void> {
+  const iso = new Date(at).toISOString();
+  if (item.kind === "outreach") {
+    await db.from("outreach").update({ scheduled_for: iso }).eq("id", item.id).eq("status", "queued");
+  } else {
+    await createAdminClient()
+      .from("followup_sequences")
+      .update({ next_due_at: iso })
+      .eq("id", item.id)
+      .eq("status", "active");
+  }
+}
+
+async function queueTail(db: Db): Promise<{ remaining: number; nextDueAt: string | null }> {
+  const { count } = await db
     .from("outreach")
     .select("id", { count: "exact", head: true })
     .eq("status", "queued");
@@ -478,16 +764,9 @@ export async function sendDueQueued(db: Db, limit = 10): Promise<DrainResult> {
     .order("scheduled_for", { ascending: true })
     .limit(1)
     .maybeSingle();
-
   return {
-    sent,
-    failed,
-    blocked,
-    deferred,
-    remaining: remaining ?? 0,
+    remaining: count ?? 0,
     nextDueAt: (next as { scheduled_for: string | null } | null)?.scheduled_for ?? null,
-    capped,
-    errors,
   };
 }
 
@@ -496,37 +775,45 @@ export interface QueueStatus {
   due: number;
   nextDueAt: string | null;
   lastDueAt: string | null;
+  /** Follow-ups scheduled from now through the end of tomorrow. */
+  followupsSoon: number;
 }
 
 export async function getQueueStatus(db: Db): Promise<QueueStatus> {
   const nowIso = new Date().toISOString();
-  const { count: queued } = await db
-    .from("outreach")
-    .select("id", { count: "exact", head: true })
-    .eq("status", "queued");
-  const { count: due } = await db
-    .from("outreach")
-    .select("id", { count: "exact", head: true })
-    .eq("status", "queued")
-    .lte("scheduled_for", nowIso);
-  const { data: first } = await db
-    .from("outreach")
-    .select("scheduled_for")
-    .eq("status", "queued")
-    .order("scheduled_for", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  const { data: last } = await db
-    .from("outreach")
-    .select("scheduled_for")
-    .eq("status", "queued")
-    .order("scheduled_for", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const soonIso = new Date(Date.now() + 36 * 3600 * 1000).toISOString();
+  const [queued, due, first, last, followups] = await Promise.all([
+    db.from("outreach").select("id", { count: "exact", head: true }).eq("status", "queued"),
+    db
+      .from("outreach")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "queued")
+      .lte("scheduled_for", nowIso),
+    db
+      .from("outreach")
+      .select("scheduled_for")
+      .eq("status", "queued")
+      .order("scheduled_for", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+    db
+      .from("outreach")
+      .select("scheduled_for")
+      .eq("status", "queued")
+      .order("scheduled_for", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    db
+      .from("followup_sequences")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "active")
+      .lte("next_due_at", soonIso),
+  ]);
   return {
-    queued: queued ?? 0,
-    due: due ?? 0,
-    nextDueAt: (first as { scheduled_for: string | null } | null)?.scheduled_for ?? null,
-    lastDueAt: (last as { scheduled_for: string | null } | null)?.scheduled_for ?? null,
+    queued: queued.count ?? 0,
+    due: due.count ?? 0,
+    nextDueAt: (first.data as { scheduled_for: string | null } | null)?.scheduled_for ?? null,
+    lastDueAt: (last.data as { scheduled_for: string | null } | null)?.scheduled_for ?? null,
+    followupsSoon: followups.count ?? 0,
   };
 }

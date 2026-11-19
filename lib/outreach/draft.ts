@@ -88,6 +88,9 @@ export function draftTargets<C extends { id: string; email: string | null }>(
   const targets: C[] = [];
   for (const c of contacts) {
     if (!looksLikeRealEmail(c.email) || covered.has(c.id)) continue;
+    // A bounced or verifier-rejected address will never be sent to.
+    const status = (c as { contact_status?: string }).contact_status;
+    if (status === "bounced" || status === "invalid") continue;
     const email = (c.email as string).trim().toLowerCase();
     if (usedEmails.has(email)) continue;
     usedEmails.add(email);

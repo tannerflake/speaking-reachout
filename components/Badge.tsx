@@ -49,7 +49,7 @@ export function ContactStatusBadge({ status }: { status: ContactStatus }) {
 }
 
 export function OutreachStatusBadge({ status }: { status: OutreachStatus }) {
-  const label = { draft: "Draft", queued: "Queued", sent: "Sent", failed: "Failed", blocked: "Blocked" }[status];
+  const label = { draft: "Draft", queued: "Scheduled", sent: "Sent", failed: "Failed", blocked: "Blocked" }[status];
   return <Pill className={outreachStatusClasses(status)}>{label}</Pill>;
 }
 
@@ -175,14 +175,39 @@ export function DraftGapBadge({
  * send queue, so it is obvious at a glance that they are already being sent
  * to. Renders nothing once the queue for that lead has drained.
  */
-export function QueuedBadge({ count }: { count: number }) {
+export function QueuedBadge({ count, nextAt }: { count: number; nextAt?: string | null }) {
   if (count <= 0) return null;
+  const when = nextAt
+    ? new Date(nextAt).toLocaleString([], {
+        weekday: "short",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : null;
   return (
     <Pill
       className="border-indigo-200 bg-indigo-50 text-indigo-700"
-      title={`${count} email${count === 1 ? "" : "s"} waiting in the send queue`}
+      title={`${count} email${count === 1 ? "" : "s"} scheduled in the send queue${when ? `; next ${when}` : ""}`}
     >
-      {count === 1 ? "In queue" : `In queue (${count})`}
+      {count === 1 ? "Scheduled" : `Scheduled (${count})`}
+      {when ? ` · next ${when}` : ""}
+    </Pill>
+  );
+}
+
+/**
+ * Drafts held back because the address was guessed or never confirmed.
+ * Unverified addresses bounce about 1 in 4, so they don't go into the queue
+ * until verified (configured verifier, Hunter "valid", or set by hand).
+ */
+export function NeedsVerificationBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <Pill
+      className="border-amber-200 bg-amber-50 text-amber-700"
+      title={`${count} draft${count === 1 ? "" : "s"} held: the address needs verification before it can be sent`}
+    >
+      {count === 1 ? "Needs verification" : `Needs verification (${count})`}
     </Pill>
   );
 }

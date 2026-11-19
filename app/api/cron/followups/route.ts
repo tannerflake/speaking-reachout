@@ -1,17 +1,18 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getEnv } from "@/lib/env";
-import { runDueFollowups } from "@/lib/followups/run";
+import { scanRepliesForFollowups } from "@/lib/followups/run";
 
 export const dynamic = "force-dynamic";
-// Each follow-up is one Gmail thread read + one short model call + one send;
-// a daily batch can take a few minutes.
+// One inbox scan (list + fetch of new inbox mail, a short model call per reply).
 export const maxDuration = 300;
 
 /**
- * Daily scheduler entry point (see vercel.json). Vercel Cron calls this with
- * `Authorization: Bearer $CRON_SECRET`; the same header lets you trigger it
- * by hand with curl. Without CRON_SECRET configured the route refuses to run,
- * so it can never be hit anonymously.
+ * Daily reply scan (see vercel.json). Follow-ups themselves no longer go out
+ * in a morning batch: each one has its own scheduled slot and is sent by the
+ * send-queue tick (/api/cron/send-queue), one email at a time. This job reads
+ * new replies so organizations that answered are stopped before their slot.
+ * Vercel Cron calls it with `Authorization: Bearer $CRON_SECRET`; without
+ * CRON_SECRET configured the route refuses to run.
  */
 export async function GET(request: NextRequest) {
   const secret = getEnv("CRON_SECRET");
@@ -26,6 +27,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const summary = await runDueFollowups();
+  const summary = await scanRepliesForFollowups();
   return NextResponse.json({ ok: true, ...summary });
 }

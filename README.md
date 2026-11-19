@@ -173,17 +173,12 @@ interested, junk…), the contact has no valid email, or the operator paused the
 sequence. The lead's status advances to **Follow-up 1 / 2 / 3** as each goes
 out, and every send, stop, pause, and resume is written to the activity log.
 
-**Scheduling.** `vercel.json` registers a cron that hits
-`/api/cron/followups` every weekday at 15:00 UTC (8am Arizona). Set
-`CRON_SECRET` in the environment; Vercel sends it as a bearer token and the
-route refuses to run without it. The Dashboard also has a **Send due
-follow-ups** button for running today's batch by hand (or on a host without
-cron), and each lead page shows its sequences with pause / resume / send-now.
-Trigger it manually with:
-
-```bash
-curl -H "Authorization: Bearer $CRON_SECRET" https://<your-domain>/api/cron/followups
-```
+**Scheduling.** Each follow-up gets its own send slot (see "Paced sending"
+below) on or after its cadence day, in the recipient's business hours, and is
+sent by the same one-email-at-a-time queue tick as first emails. The daily
+`/api/cron/followups` job (weekdays 15:00 UTC) only reads new replies; the
+tick also reads them every 15 minutes. Each lead page shows the exact slot of
+the next nudge, with pause / resume / "move up to next open slot".
 
 Apply `supabase/migrations/0020_followups.sql` before using this.
 
@@ -196,15 +191,39 @@ Apply `supabase/migrations/0020_followups.sql` before using this.
   Two leads are enriched at a time; each call is one lead so it stays inside
   function limits. The Leads bulk bar has the same action as
   "Find Contacts + Draft".
-- **Throttled bulk send** → select leads (shift-click selects a range) and
-  press "Send Drafts", choosing a spread (15 min to 2 hours). Drafts are
-  marked `queued` with a `scheduled_for` time, at least 20s apart with jitter
-  (`lib/outreach/send.ts`). The Leads page drains due emails every 20s while
-  open; `/api/cron/send-queue` (daily at 16:00 UTC in `vercel.json`, the most the
-  Hobby plan allows; on Pro you can change it to `*/10 * * * *`) catches
-  anything left over. A rolling
-  cap of 300 sends per 24h applies. "Cancel remaining" returns queued emails
-  to draft. Apply `supabase/migrations/0022_send_queue.sql` first.
+- **Paced sending** (`lib/outreach/schedule.ts`, `slots.ts`, `send.ts`).
+  Nothing is sent the moment it is approved. "Approve & schedule", a lead's
+  "schedule all", and the Leads bulk "Prepare + Schedule" put each email in
+  the queue with a `scheduled_for` slot:
+  - weekdays (US holidays skipped), 8:30am-4:30pm in the recipient's time
+    zone (from the lead's location; US Eastern when unknown);
+  - a random 2-6 minute gap between any two sends from the mailbox, at most
+    20 in any hour and 160 per (Eastern) day, first emails and follow-ups
+    together;
+  - two people at one organization at least 45 minutes apart and at most 4
+    per org per day, so an org's 7 contacts spread over two days.
+  A tick (`/api/cron/send-queue`) sends at most one due email per call after
+  re-checking pacing and every safety check (engagement guard with the live
+  mailbox, duplicate first email, verification, Gmail quota backoff). Due
+  items that no longer fit (outside hours, a cap, a colleague just emailed)
+  get a new slot. The tick runs every minute from Supabase pg_cron + pg_net
+  (`supabase/migrations/0032_send_queue_pg_cron.sql`; Vercel Hobby only
+  allows daily crons, so the `vercel.json` entry is a daily safety net) and
+  while the Leads page is open. "Cancel remaining" / "Unschedule" return
+  queued emails to draft.
+- **Bounce protection** (`lib/contacts/deliverability.ts`, `verify.ts`). Only
+  `verified` addresses are queued: found on the org's own page, Hunter's own
+  check said "valid", the configured verifier said valid, or set/confirmed by
+  hand. Guessed or merely listed addresses keep their drafts but show "Needs
+  verification" and are held. Set `EMAIL_VERIFIER=zerobounce|neverbounce|hunter`
+  (+ `ZEROBOUNCE_API_KEY` / `NEVERBOUNCE_API_KEY`) to verify them
+  automatically at queue time. A hard bounce marks the contact `bounced` and
+  it is never emailed again. Migration `0031_deliverability.sql`.
+- **Plain, personal email** (`lib/outreach/plainEmail.ts`). Plain text
+  (quoted-printable), a display-name From (`SENDER_NAME`, else the Gmail
+  send-as name), no attachment (set `OUTREACH_ATTACH_ONE_PAGER=true` to bring
+  the PDF back), at most 2 links in a first email, no link shorteners or
+  HTML; follow-ups reply in-thread with In-Reply-To/References.
 - **Who sent it** → `outreach.sent_via` (`app` | `gmail`). The app writes `app`
   at send time; outreach sent by hand from the inbox and imported later is
   `gmail`. The Leads list shows a "Sent by" column and filter, and the lead

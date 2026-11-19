@@ -1,4 +1,5 @@
 import type { LeadStatus } from "@/lib/types";
+import { localDayStartAfter } from "@/lib/outreach/schedule";
 
 /**
  * Follow-up cadence: days to wait AFTER the previous email in the thread
@@ -34,23 +35,12 @@ export function stepOfStatus(status: LeadStatus): number {
 }
 
 /**
- * When follow-up `step` becomes due, given when the previous email went out.
- * Lands on a weekday (a Saturday/Sunday due date rolls to Monday) and is
- * normalized to the start of that UTC day so the daily scheduler, which runs
- * mid-morning US time, sends it on the intended day.
+ * The earliest moment follow-up `step` may go out: the start of the local day
+ * (recipient's time zone) `gap` days after the previous email. The send
+ * schedule then picks a weekday business-hour slot on or after it, so a due
+ * day that lands on a weekend rolls to Monday.
  */
-export function computeDueAt(previousSentAt: Date, step: number): Date {
+export function followupEarliest(previousSentAt: Date, step: number, tz: string): number {
   const gap = FOLLOWUP_GAP_DAYS[step] ?? FOLLOWUP_GAP_DAYS[MAX_FOLLOWUPS];
-  return weekdayAfter(previousSentAt, gap);
-}
-
-/** `days` after `from`, rolled forward off weekends, at start of UTC day. */
-export function weekdayAfter(from: Date, days: number): Date {
-  const due = new Date(from.getTime());
-  due.setUTCDate(due.getUTCDate() + days);
-  due.setUTCHours(0, 0, 0, 0);
-  const dow = due.getUTCDay(); // 0 = Sun, 6 = Sat
-  if (dow === 6) due.setUTCDate(due.getUTCDate() + 2);
-  else if (dow === 0) due.setUTCDate(due.getUTCDate() + 1);
-  return due;
+  return localDayStartAfter(previousSentAt.getTime(), gap, tz);
 }

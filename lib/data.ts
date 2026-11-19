@@ -16,8 +16,10 @@ import {
 } from "@/lib/outreach/guard";
 import { MAX_CONTACT_ROWS_PER_LEAD } from "@/lib/contacts/multiSource";
 import { draftTargets } from "@/lib/outreach/draft";
+import { sendHoldReason } from "@/lib/contacts/deliverability";
 import type { CandidateRecord, StopReason } from "@/lib/claude/discovery";
 import type {
+  ContactStatus,
   Booking,
   Contact,
   EmailInsight,
@@ -49,6 +51,10 @@ export interface LeadListRow extends Lead {
   hasUnsentDraft: boolean;
   /** Emails to this lead sitting in the send queue (status 'queued'). */
   queuedCount: number;
+  /** When the next queued email to this lead is scheduled to go out. */
+  nextScheduledAt: string | null;
+  /** Unsent drafts held because the contact's address needs verification. */
+  needsVerificationCount: number;
   /** Contacts with a usable email address. */
   emailableContacts: number;
   /**
@@ -114,7 +120,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
   let query = supabase
     .from("leads")
     .select(
-      "*, contacts(id, email), interactions(created_at), outreach(status, sent_via, sent_at, contact_id, error)",
+      "*, contacts(id, email, contact_status), interactions(created_at), outreach(status, sent_via, sent_at, contact_id, error, scheduled_for)",
     )
     .order("created_at", { ascending: false });
 
@@ -125,7 +131,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
 
   const { data } = await query;
   type Row = Lead & {
-    contacts: { id: string; email: string | null }[];
+    contacts: { id: string; email: string | null; contact_status: ContactStatus }[];
     interactions: { created_at: string }[];
     outreach: {
       status: string;
@@ -133,6 +139,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
       sent_at: string | null;
       contact_id: string | null;
       error: string | null;
+      scheduled_for: string | null;
     }[];
   };
   const rows = (data as Row[]) ?? [];
@@ -176,6 +183,16 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
       lastActivity: last,
       hasUnsentDraft: (row.outreach ?? []).some((o) => o.status === "draft"),
       queuedCount: (row.outreach ?? []).filter((o) => o.status === "queued").length,
+      nextScheduledAt:
+        (row.outreach ?? [])
+          .filter((o) => o.status === "queued" && o.scheduled_for)
+          .map((o) => o.scheduled_for as string)
+          .sort()[0] ?? null,
+      needsVerificationCount: (row.outreach ?? []).filter((o) => {
+        if (o.status !== "draft" && o.status !== "failed") return false;
+        const c = contacts.find((x) => x.id === o.contact_id);
+        return sendHoldReason(c) === "needs_verification";
+      }).length,
       originatedVia: firstSent?.sent_via ?? null,
       blockedReason:
         crmBlocked.get(row.id) ??

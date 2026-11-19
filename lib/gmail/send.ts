@@ -4,6 +4,7 @@ import { getGmailConnection, saveGmailTokens } from "@/lib/gmail/connection";
 import { stripCitationTags } from "@/lib/claude/sanitize";
 import type { EmailAttachment } from "@/lib/gmail/attachments";
 import { withGmailRetry } from "@/lib/gmail/retry";
+import { getEnv } from "@/lib/env";
 
 export class GmailNotConnectedError extends Error {
   constructor() {
@@ -18,7 +19,8 @@ export interface SendResult {
 }
 
 /**
- * Send a plain-text email (optionally with file attachments) from the
+ * Send a plain-text, one-to-one email (attachments only if a caller insists;
+ * outreach sends none, see lib/outreach/plainEmail.ts) from the
  * connected Gmail account via the Gmail API (`users.messages.send`).
  * Server-only — uses the stored refresh token.
  */
@@ -48,7 +50,7 @@ export async function sendGmail(params: {
   const body = stripCitationTags(params.body).trim();
   const raw = buildRawMessage({
     to: params.to,
-    from: conn.email ?? undefined,
+    from: conn.email ? await fromHeader(gmail, conn.email) : undefined,
     subject,
     body,
     inReplyTo: params.thread?.inReplyTo ?? undefined,
@@ -110,6 +112,41 @@ export async function getGmailClient(): Promise<{
   return { gmail, conn: { email: conn.email } };
 }
 
+let cachedFrom: { email: string; header: string } | null = null;
+
+/**
+ * "Cheryl Flake <cheryl@jeffflake.com>" rather than a bare address: a missing
+ * display name is a small but real bulk-mail signal and looks cold in the
+ * inbox. SENDER_NAME wins; otherwise the Gmail "send as" display name; the
+ * bare address only if neither is available.
+ */
+async function fromHeader(
+  gmail: ReturnType<typeof google.gmail>,
+  email: string,
+): Promise<string> {
+  const configured = getEnv("SENDER_NAME");
+  if (configured) return formatAddress(configured, email);
+  if (cachedFrom?.email === email) return cachedFrom.header;
+  let name = "";
+  try {
+    const res = await gmail.users.settings.sendAs.get({ userId: "me", sendAsEmail: email });
+    name = res.data.displayName?.trim() ?? "";
+  } catch {
+    // Settings read needs the read-only scope; fall back to the address.
+  }
+  const header = name ? formatAddress(name, email) : email;
+  cachedFrom = { email, header };
+  return header;
+}
+
+function formatAddress(name: string, email: string): string {
+  const clean = name.replace(/["\\\r\n<>]/g, "").trim();
+  if (!clean) return email;
+  return /^[\x20-\x7E]*$/.test(clean)
+    ? `"${clean}" <${email}>`
+    : `${encodeHeader(clean)} <${email}>`;
+}
+
 export function buildRawMessage(opts: {
   to: string;
   from?: string;
@@ -145,11 +182,14 @@ export function buildMimeMessage(opts: {
     "MIME-Version: 1.0",
   ].filter(Boolean) as string[];
 
+  // Quoted-printable keeps every line legal (7-bit, under 76 characters)
+  // whatever the text holds: curly quotes, accented names, long paragraphs.
+  // Raw UTF-8 under a "7bit" label is malformed MIME, which filters notice.
   const textPart = [
     'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: 7bit",
+    "Content-Transfer-Encoding: quoted-printable",
     "",
-    opts.body,
+    encodeQuotedPrintable(opts.body),
   ].join("\r\n");
 
   const attachments = opts.attachments ?? [];
@@ -187,6 +227,32 @@ function base64Url(message: string): string {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
+}
+
+/** RFC 2045 quoted-printable for a UTF-8 text body, CRLF line endings. */
+export function encodeQuotedPrintable(text: string): string {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const out: string[] = [];
+  for (const line of lines) {
+    const bytes = Buffer.from(line, "utf-8");
+    const tokens: string[] = [];
+    bytes.forEach((b, i) => {
+      const last = i === bytes.length - 1;
+      if ((b === 0x20 || b === 0x09) && !last) tokens.push(String.fromCharCode(b));
+      else if (b >= 33 && b <= 126 && b !== 61) tokens.push(String.fromCharCode(b));
+      else tokens.push(`=${b.toString(16).toUpperCase().padStart(2, "0")}`);
+    });
+    let cur = "";
+    for (const t of tokens) {
+      if (cur.length + t.length > 75) {
+        out.push(`${cur}=`);
+        cur = "";
+      }
+      cur += t;
+    }
+    out.push(cur);
+  }
+  return out.join("\r\n");
 }
 
 /** RFC 2047-encode a header value if it contains non-ASCII characters. */

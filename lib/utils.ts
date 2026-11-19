@@ -145,14 +145,18 @@ export function contactStatusClasses(status: ContactStatus): string {
     verified: "bg-emerald-50 text-emerald-700 border-emerald-200",
     unverified: "bg-amber-50 text-amber-700 border-amber-200",
     needs_lookup: "bg-rose-50 text-rose-700 border-rose-200",
+    bounced: "bg-rose-100 text-rose-800 border-rose-300",
+    invalid: "bg-rose-100 text-rose-800 border-rose-300",
   }[status];
 }
 
 export function contactStatusLabel(status: ContactStatus): string {
   return {
     verified: "Verified",
-    unverified: "Unverified",
+    unverified: "Needs verification",
     needs_lookup: "Needs lookup",
+    bounced: "Bounced",
+    invalid: "Invalid",
   }[status];
 }
 
@@ -172,7 +176,9 @@ export function pickPrimaryContact(contacts: Contact[]): Contact | null {
   if (!contacts || contacts.length === 0) return null;
   return (
     contacts.find((c) => c.email && c.contact_status === "verified") ??
-    contacts.find((c) => c.email) ??
+    contacts.find(
+      (c) => c.email && c.contact_status !== "bounced" && c.contact_status !== "invalid",
+    ) ??
     contacts[0]
   );
 }
