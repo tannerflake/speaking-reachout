@@ -1,14 +1,24 @@
 import { after, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getActiveRules, getExistingLeadKeys } from "@/lib/data";
-import { discoverLeads } from "@/lib/claude/discovery";
 import {
+  discoverLeads,
+  type BacklogCandidate,
+  type CandidateOutcome,
+} from "@/lib/claude/discovery";
+import { discoveryReuseKey } from "@/lib/claude/rules";
+import {
+  claimDiscoveryBacklog,
   discoveryStopRequested,
   insertDiscoveredLead,
+  saveDiscoveryBacklog,
+  settleDiscoveryBacklog,
   startDiscoveryRun,
   updateDiscoveryRun,
+  type BacklogContext,
   type DiscoverySummary,
 } from "@/lib/discovery/persist";
+import { getHunterStatus } from "@/lib/contacts/hunterStatus";
 import {
   enrichQueueAvailable,
   kickContext,
@@ -119,6 +129,10 @@ async function runDiscovery(opts: {
   const { requested, focusText, autoEnrich, ctx, send } = opts;
   const admin = createAdminClient();
   let runId: string | null = null;
+  // Saved extras this run claimed, and what happened to each; released in
+  // `finally` whatever happens, so a crash never strands them.
+  let claimed: BacklogCandidate[] = [];
+  const backlogOutcomes = new Map<string, { outcome: CandidateOutcome; reason: string }>();
   try {
     runId = await startDiscoveryRun(admin, requested, focusText, autoEnrich);
     // With migration 0030 applied, contacts + drafts go through the
@@ -126,10 +140,19 @@ async function runDiscovery(opts: {
     const queued = autoEnrich && (await enrichQueueAvailable(admin));
     send({ type: "run", runId, queued });
 
-    const [rules, existing] = await Promise.all([
-      getActiveRules(admin),
-      getExistingLeadKeys(),
-    ]);
+    const rules = await getActiveRules(admin);
+    const reuse = discoveryReuseKey(rules, focusText);
+    const backlogCtx: BacklogContext = {
+      focus: focusText,
+      focusKey: reuse.focusKey,
+      rulesKey: reuse.rulesKey,
+      rulesSnapshot: reuse.snapshot,
+    };
+    // Claim saved extras BEFORE reading the CRM, so the dedupe snapshot the
+    // reused candidates are checked against is at least as new as the claim.
+    // Over-claim: some will turn out to be in the CRM by now.
+    claimed = await claimDiscoveryBacklog(admin, runId, backlogCtx, requested * 2 + 5);
+    const existing = await getExistingLeadKeys();
     const detail = focusText
       ? `Discovered via focus "${focusText}".`
       : "Discovered via Discover.";
@@ -143,6 +166,10 @@ async function runDiscovery(opts: {
       rules,
       existing,
       budgetMs: RUN_BUDGET_MS,
+      backlog: claimed,
+      onBacklogOutcome: (id, outcome, reason) => {
+        backlogOutcomes.set(id, { outcome, reason });
+      },
       shouldStop: () => discoveryStopRequested(admin, runId),
       onLead: async (lead) => {
         const row = await insertDiscoveredLead(admin, lead, detail, runId, queued);
@@ -164,20 +191,41 @@ async function runDiscovery(opts: {
           repeats: progress.repeats,
           rule_filtered: progress.ruleFiltered,
           surplus: progress.surplus,
+          reused: progress.reused,
           rounds: progress.rounds,
           searches: progress.searches,
         });
       },
     });
 
-    const { leads: _leads, ...counts } = result;
+    const backlogSaved = await saveDiscoveryBacklog(
+      admin,
+      runId,
+      result.surplusLeads,
+      backlogCtx,
+    );
+    // Contacts for these leads come from Hunter next; say so now if it is
+    // out of searches or failing, instead of leads quietly arriving emailless.
+    const warnings: string[] = [];
+    if (inserted > 0) {
+      const hunter = await getHunterStatus().catch(() => null);
+      if (hunter?.warning) {
+        warnings.push(hunter.warning);
+        if (hunter.level === "error") console.error(`[discover] ${hunter.warning}`);
+      }
+    }
+
+    const { leads: _leads, surplusLeads: _surplus, ...counts } = result;
     void _leads;
+    void _surplus;
     const summary: DiscoverySummary = {
       ...counts,
       runId,
       requested,
       inserted,
       needsLookup,
+      backlogSaved,
+      warnings,
     };
     await updateDiscoveryRun(admin, runId, {
       status: "done",
@@ -188,11 +236,14 @@ async function runDiscovery(opts: {
       repeats: result.repeats,
       rule_filtered: result.ruleFiltered,
       surplus: result.surplus,
+      reused: result.reused,
       rounds: result.rounds,
       searches: result.searches,
       stop_reason: result.stopReason,
       candidates: result.candidates,
-      ...(result.errors.length > 0 ? { error: result.errors.join("; ") } : {}),
+      ...(result.errors.length > 0 || warnings.length > 0
+        ? { error: [...result.errors, ...warnings].join("; ") }
+        : {}),
     });
     if (queued) await kickEnrichWorkers(admin, ctx);
     send({ type: "done", summary });
@@ -204,5 +255,9 @@ async function runDiscovery(opts: {
       error: message,
     }).catch(() => {});
     send({ type: "error", error: message });
+  } finally {
+    await settleDiscoveryBacklog(admin, runId, claimed, backlogOutcomes).catch((e) =>
+      console.error(`[discover] could not settle saved extras: ${e instanceof Error ? e.message : e}`),
+    );
   }
 }

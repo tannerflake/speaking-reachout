@@ -3,7 +3,10 @@ import { domainFromUrl, looksLikeRealEmail } from "@/lib/utils";
 import type { ContactStatus } from "@/lib/types";
 import {
   hunterContactStatus,
+  hunterDomainPeople,
+  hunterErrorText,
   hunterFindPerson,
+  isBlockingHunterError,
   type HunterPerson,
 } from "@/lib/contacts/hunter";
 
@@ -13,6 +16,12 @@ export interface ResolvedContact {
   email: string | null;
   contact_status: ContactStatus;
   source_url: string | null;
+  /**
+   * Set when the provider itself failed (Hunter out of searches, bad key,
+   * rate limited), as opposed to "looked and found nobody". Callers must
+   * report it and must NOT mark the contact as looked-up.
+   */
+  providerError?: string;
 }
 
 export interface ResolverInput {
@@ -97,17 +106,7 @@ class HunterContactResolver implements ContactResolver {
     if (input.personName) return this.findPerson(input.personName, domain);
 
     try {
-      const url = new URL("https://api.hunter.io/v2/domain-search");
-      url.searchParams.set("domain", domain);
-      url.searchParams.set("api_key", this.apiKey);
-      url.searchParams.set("limit", "10");
-
-      const res = await fetch(url, { method: "GET" });
-      if (!res.ok) return { ...NEEDS_LOOKUP };
-      const json = (await res.json()) as {
-        data?: { emails?: HunterEmail[] };
-      };
-      const emails = json.data?.emails ?? [];
+      const emails = await hunterDomainPeople(domain, this.apiKey);
 
       // Prefer events/comms/program roles, then highest confidence.
       const ranked = [...emails].sort(
@@ -131,14 +130,21 @@ class HunterContactResolver implements ContactResolver {
         contact_status: hunterContactStatus(best) ?? "unverified",
         source_url: `https://${domain}`,
       };
-    } catch {
+    } catch (e) {
+      if (isBlockingHunterError(e)) return { ...NEEDS_LOOKUP, providerError: hunterErrorText(e) };
       return { ...NEEDS_LOOKUP };
     }
   }
 
   /** Hunter Email Finder: one named person at a domain (1 credit). */
   private async findPerson(fullName: string, domain: string): Promise<ResolvedContact> {
-    const hit = await hunterFindPerson(fullName, domain, this.apiKey);
+    let hit;
+    try {
+      hit = await hunterFindPerson(fullName, domain, this.apiKey);
+    } catch (e) {
+      if (isBlockingHunterError(e)) return { ...NEEDS_LOOKUP, providerError: hunterErrorText(e) };
+      return { ...NEEDS_LOOKUP };
+    }
     if (!hit) return { ...NEEDS_LOOKUP };
     return {
       name: fullName,

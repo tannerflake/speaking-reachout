@@ -16,6 +16,8 @@ import {
 } from "@/lib/utils";
 import { ScanEmailButton } from "@/components/ScanEmailButton";
 import { RunFollowupsButton } from "@/components/RunFollowupsButton";
+import { HunterWarning } from "@/components/HunterWarning";
+import { getHunterStatus } from "@/lib/contacts/hunterStatus";
 
 export const dynamic = "force-dynamic";
 
@@ -24,11 +26,12 @@ export default async function DashboardPage() {
   const me = await getCurrentUser();
   if (me?.role === "editor") redirect("/admin/site-editor");
 
-  const [counts, activity, dueFollowups, dueRevisits] = await Promise.all([
+  const [counts, activity, dueFollowups, dueRevisits, hunter] = await Promise.all([
     getPipelineCounts(),
     getRecentInteractions(15),
     getDueFollowupCount(),
     getDueRevisits(),
+    getHunterStatus(),
   ]);
 
   return (
@@ -36,6 +39,8 @@ export default async function DashboardPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-zinc-900">Dashboard</h1>
       </div>
+
+      <HunterWarning status={hunter} />
 
       {/* Pipeline summary */}
       <section>

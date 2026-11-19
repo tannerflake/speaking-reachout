@@ -6,15 +6,19 @@ import type { ContactStatus } from "@/lib/types";
 import {
   hunterContactStatus,
   hunterDomainPeople,
+  hunterErrorText,
   hunterFindPerson,
+  isBlockingHunterError,
+  type HunterPerson,
 } from "@/lib/contacts/hunter";
+import { recordProviderUsage } from "@/lib/claude/usage";
 import { personKey } from "@/lib/contacts/personKey";
 
 export { personKey };
 
 /**
  * Multi-source contact finder. Asks several web-searching LLMs (Claude,
- * OpenAI, Gemini, Perplexity) for up to N people at an org who could book a
+ * OpenAI, Gemini) for up to N people at an org who could book a
  * paid speaker, then:
  *   1. checks each person actually appears on the page the model cited,
  *   2. keeps an email only if it's printed on that page (never a guessed
@@ -25,7 +29,9 @@ export { personKey };
  *      Hunter could have answered.
  *
  * Every provider is optional: a missing key or a failed call just drops that
- * source. Hunter credits are spent automatically here by design: the
+ * source. Perplexity was dropped on 2026-11-19: across 97 orgs it added one
+ * emailed contact the other sources missed. Every OpenAI, Gemini and Hunter
+ * call is logged in api_usage (see recordProviderUsage). Hunter credits are spent automatically here by design: the
  * operator asked that net-new leads arrive sendable without manual lookups.
  */
 
@@ -39,7 +45,7 @@ export const MAX_CONTACT_ROWS_PER_LEAD = MAX_CONTACTS_PER_LEAD * 2;
 
 const PROVIDER_TIMEOUT_MS = 150_000;
 
-export type ContactSource = "claude" | "openai" | "gemini" | "perplexity" | "hunter";
+export type ContactSource = "claude" | "openai" | "gemini" | "hunter";
 
 export interface FoundContact {
   name: string;
@@ -131,86 +137,139 @@ async function fromClaude(prompt: string): Promise<string> {
 }
 
 async function fromOpenAI(prompt: string, apiKey: string): Promise<string> {
-  const res = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: getEnv("OPENAI_MODEL") ?? "gpt-5.5",
-      tools: [{ type: "web_search" }],
-      reasoning: { effort: "medium" },
-      input: prompt,
-    }),
-    signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
-  });
-  const json = (await res.json()) as {
-    error?: { message?: string };
-    output?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>;
-  };
-  if (!res.ok || json.error) {
-    throw new Error(json.error?.message ?? `HTTP ${res.status}`);
+  const model = getEnv("OPENAI_MODEL") ?? "gpt-5.5";
+  const started = Date.now();
+  let usage: { input_tokens?: number; output_tokens?: number } | undefined;
+  let searches = 0;
+  try {
+    const res = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        tools: [{ type: "web_search" }],
+        reasoning: { effort: "medium" },
+        input: prompt,
+      }),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+    });
+    const json = (await res.json()) as {
+      error?: { message?: string };
+      usage?: { input_tokens?: number; output_tokens?: number };
+      output?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>;
+    };
+    usage = json.usage;
+    searches = (json.output ?? []).filter((o) => o.type === "web_search_call").length;
+    if (!res.ok || json.error) {
+      throw new Error(json.error?.message ?? `HTTP ${res.status}`);
+    }
+    const text = (json.output ?? [])
+      .filter((o) => o.type === "message")
+      .flatMap((o) => o.content ?? [])
+      .map((c) => c.text ?? "")
+      .join("\n");
+    void recordProviderUsage({
+      provider: "openai",
+      feature: "contacts",
+      model,
+      durationMs: Date.now() - started,
+      ok: true,
+      inputTokens: usage?.input_tokens,
+      outputTokens: usage?.output_tokens,
+      webSearches: searches,
+    });
+    return text;
+  } catch (e) {
+    void recordProviderUsage({
+      provider: "openai",
+      feature: "contacts",
+      model,
+      durationMs: Date.now() - started,
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+      inputTokens: usage?.input_tokens,
+      outputTokens: usage?.output_tokens,
+      webSearches: searches,
+    });
+    throw e;
   }
-  return (json.output ?? [])
-    .filter((o) => o.type === "message")
-    .flatMap((o) => o.content ?? [])
-    .map((c) => c.text ?? "")
-    .join("\n");
+}
+
+interface GeminiUsage {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  thoughtsTokenCount?: number;
+  toolUsePromptTokenCount?: number;
+}
+
+/** Gemini bills thinking tokens as output and grounding context as input. */
+function geminiTokens(m: GeminiUsage | undefined) {
+  return {
+    inputTokens: (m?.promptTokenCount ?? 0) + (m?.toolUsePromptTokenCount ?? 0),
+    outputTokens: (m?.candidatesTokenCount ?? 0) + (m?.thoughtsTokenCount ?? 0),
+  };
 }
 
 async function fromGemini(prompt: string, apiKey: string): Promise<string> {
   const model = getEnv("GEMINI_MODEL") ?? "gemini-3.5-flash";
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
-      method: "POST",
-      headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
-      }),
-      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
-    },
-  );
-  const json = (await res.json()) as {
-    error?: { message?: string };
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-  if (!res.ok || json.error) {
-    throw new Error(json.error?.message ?? `HTTP ${res.status}`);
+  const started = Date.now();
+  let meta: GeminiUsage | undefined;
+  let searches = 0;
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          tools: [{ google_search: {} }],
+        }),
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+      },
+    );
+    const json = (await res.json()) as {
+      error?: { message?: string };
+      usageMetadata?: GeminiUsage;
+      candidates?: Array<{
+        content?: { parts?: Array<{ text?: string }> };
+        groundingMetadata?: { webSearchQueries?: string[] };
+      }>;
+    };
+    meta = json.usageMetadata;
+    searches = json.candidates?.[0]?.groundingMetadata?.webSearchQueries?.length ?? 0;
+    if (!res.ok || json.error) {
+      throw new Error(json.error?.message ?? `HTTP ${res.status}`);
+    }
+    const text = (json.candidates?.[0]?.content?.parts ?? [])
+      .map((p) => p.text ?? "")
+      .join("\n");
+    void recordProviderUsage({
+      provider: "gemini",
+      feature: "contacts",
+      model,
+      durationMs: Date.now() - started,
+      ok: true,
+      ...geminiTokens(meta),
+      webSearches: searches,
+    });
+    return text;
+  } catch (e) {
+    void recordProviderUsage({
+      provider: "gemini",
+      feature: "contacts",
+      model,
+      durationMs: Date.now() - started,
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+      ...geminiTokens(meta),
+      webSearches: searches,
+    });
+    throw e;
   }
-  return (json.candidates?.[0]?.content?.parts ?? [])
-    .map((p) => p.text ?? "")
-    .join("\n");
-}
-
-async function fromPerplexity(prompt: string, apiKey: string): Promise<string> {
-  // Perplexity's Agent API (successor to the Sonar chat endpoint).
-  const res = await fetch("https://api.perplexity.ai/v1/agent", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      preset: getEnv("PERPLEXITY_PRESET") ?? "medium",
-      input: prompt,
-    }),
-    signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
-  });
-  const json = (await res.json()) as {
-    error?: { message?: string };
-    output?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>;
-  };
-  if (!res.ok || json.error) {
-    throw new Error(json.error?.message ?? `HTTP ${res.status}`);
-  }
-  return (json.output ?? [])
-    .filter((o) => o.type === "message")
-    .flatMap((o) => o.content ?? [])
-    .map((c) => c.text ?? "")
-    .join("\n");
 }
 
 /** Strip inline citation markers like "[web:88]" or "[3]" that some providers leave in. */
@@ -253,13 +312,13 @@ function parseCandidates(text: string): Candidate[] {
 
 // --- Verification -----------------------------------------------------------
 
-interface PageCheck {
+export interface PageCheck {
   fetched: boolean;
   text: string;
   emails: string[];
 }
 
-async function fetchPage(url: string): Promise<PageCheck> {
+export async function fetchPage(url: string): Promise<PageCheck> {
   try {
     const res = await fetch(url, {
       headers: {
@@ -343,7 +402,6 @@ export function availableContactSources(): ContactSource[] {
   if (getEnv("ANTHROPIC_API_KEY")) s.push("claude");
   if (getEnv("OPENAI_API_KEY")) s.push("openai");
   if (getEnv("GEMINI_API_KEY")) s.push("gemini");
-  if (getEnv("PERPLEXITY_API_KEY")) s.push("perplexity");
   return s;
 }
 
@@ -357,11 +415,9 @@ export async function findContactsMultiSource(
   const runners: Array<[ContactSource, () => Promise<string>]> = [];
   const openaiKey = getEnv("OPENAI_API_KEY");
   const geminiKey = getEnv("GEMINI_API_KEY");
-  const pplxKey = getEnv("PERPLEXITY_API_KEY");
   if (getEnv("ANTHROPIC_API_KEY")) runners.push(["claude", () => fromClaude(prompt)]);
   if (openaiKey) runners.push(["openai", () => fromOpenAI(prompt, openaiKey)]);
   if (geminiKey) runners.push(["gemini", () => fromGemini(prompt, geminiKey)]);
-  if (pplxKey) runners.push(["perplexity", () => fromPerplexity(prompt, pplxKey)]);
 
   const settled = await Promise.allSettled(runners.map(([, run]) => run()));
 
@@ -470,9 +526,28 @@ export async function findContactsMultiSource(
   let hunterUsed = false;
   const hunterKey = getEnv("HUNTER_API_KEY");
   const needsEmail = found.some((f) => !f.email);
+  // Quota / bad key / rate limit: reported as a failed source (and in the
+  // logs) instead of looking like "Hunter found nobody", and no further
+  // Hunter calls are made for this org.
+  let hunterBlocked = false;
+  const hunterFailed = (e: unknown): boolean => {
+    if (!isBlockingHunterError(e)) return false;
+    if (!hunterBlocked) {
+      hunterBlocked = true;
+      const reason = hunterErrorText(e);
+      console.error(`[contacts] ${input.name}: ${reason}`);
+      failed.push({ source: "hunter", reason });
+    }
+    return true;
+  };
   if (hunterKey && orgDomain && (needsEmail || found.length < input.max)) {
     hunterUsed = true;
-    const people = await hunterDomainPeople(orgDomain, hunterKey);
+    let people: HunterPerson[] = [];
+    try {
+      people = await hunterDomainPeople(orgDomain, hunterKey);
+    } catch (e) {
+      if (!hunterFailed(e)) throw e;
+    }
     for (const p of people) {
       if (!looksLikeRealEmail(p.value)) continue;
       // Listed by Hunter is not the same as checked by Hunter.
@@ -506,7 +581,7 @@ export async function findContactsMultiSource(
   // Per-person Email Finder (1 credit each) for anyone the domain search
   // didn't cover. Limited to the people we'd actually keep, so we never pay
   // for contacts that would be cut by the `max` slice below.
-  if (hunterKey && orgDomain) {
+  if (hunterKey && orgDomain && !hunterBlocked) {
     const ranked = [...found].sort(
       (a, b) =>
         Number(Boolean(b.email)) - Number(Boolean(a.email)) ||
@@ -517,8 +592,17 @@ export async function findContactsMultiSource(
     if (missing.length > 0) {
       hunterUsed = true;
       await mapWithConcurrency(missing, 3, async (f) => {
+        if (hunterBlocked) return;
+        let hit;
+        try {
+          hit = await hunterFindPerson(f.name, orgDomain, hunterKey);
+        } catch (e) {
+          if (!hunterFailed(e)) throw e;
+          return;
+        }
+        // Only a real answer counts as looked-up; a quota failure stays
+        // open so the person is retried once credits are back.
         f.lookupAttempted = true;
-        const hit = await hunterFindPerson(f.name, orgDomain, hunterKey);
         if (!hit || excludeEmails.has(hit.email)) return;
         f.email = hit.email;
         f.contact_status = hit.contact_status;

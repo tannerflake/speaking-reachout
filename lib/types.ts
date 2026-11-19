@@ -128,6 +128,10 @@ export interface Contact {
   source_url: string | null;
   /** When the paid email provider was last asked about this person (null = never). */
   email_lookup_attempted_at: string | null;
+  /** Last email-verifier check (migration 0033; absent before it). */
+  verification_checked_at?: string | null;
+  /** That check's result, e.g. "zerobounce:catch-all" (migration 0033). */
+  verification_result?: string | null;
   created_at: string;
 }
 

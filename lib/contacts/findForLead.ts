@@ -26,7 +26,7 @@ export interface MultiFindResult {
 
 /**
  * Find up to MAX_CONTACTS_PER_LEAD people at one lead by asking every
- * configured web-search LLM (Claude, OpenAI, Gemini, Perplexity), verifying
+ * configured web-search LLM (Claude, OpenAI, Gemini), verifying
  * them against the pages they cite, and filling gaps with Hunter (one domain
  * search plus a per-person lookup for anyone still missing an email). Also
  * resolves any email-less contact already on the lead. Runs per lead, from the
@@ -112,6 +112,8 @@ export async function findContactsForLead(
   });
 
   hunterUsedForExisting = hunterUsedForExisting || result.hunterUsed;
+  // Hunter out of searches / bad key: say so wherever this run is reported.
+  const hunterFailure = result.failed.find((f) => f.source === "hunter")?.reason;
   if (result.contacts.length === 0) {
     return {
       ...empty,
@@ -119,9 +121,10 @@ export async function findContactsForLead(
       failed: result.failed,
       hunterUsed: hunterUsedForExisting,
       error:
-        result.succeeded.length === 0
+        (result.succeeded.length === 0
           ? "None of the contact sources returned results."
-          : "No new contacts could be verified for this lead.",
+          : "No new contacts could be verified for this lead.") +
+        (hunterFailure ? ` ${hunterFailure}` : ""),
     };
   }
 
@@ -179,7 +182,9 @@ export async function findContactsForLead(
   await supabase.from("interactions").insert({
     lead_id: lead.id,
     kind: "note",
-    detail: `Found ${toInsert.length} contacts (${withEmail} with email): ${lines}.`,
+    detail: `Found ${toInsert.length} contacts (${withEmail} with email): ${lines}.${
+      hunterFailure ? ` ${hunterFailure}` : ""
+    }`,
   });
 
   return {
@@ -188,6 +193,7 @@ export async function findContactsForLead(
     sources: result.succeeded,
     failed: result.failed,
     hunterUsed: hunterUsedForExisting,
+    ...(hunterFailure && withEmail === 0 ? { error: hunterFailure } : {}),
   };
 }
 
@@ -257,6 +263,7 @@ async function fillMissingEmails(
   if (targets.length === 0) return 0;
 
   const resolvedLines: string[] = [];
+  const providerErrors = new Set<string>();
   // Addresses already on the lead. A lookup that lands on one of them would
   // create a second contact for the same inbox, so it is discarded.
   const takenEmails = new Set(
@@ -274,6 +281,12 @@ async function fillMissingEmails(
         personName: c.name,
         claudeContact: null,
       });
+      if (result.providerError) {
+        // Provider down or out of credits: not a real lookup, so leave the
+        // contact unmarked for a retry and report it once on the lead.
+        providerErrors.add(result.providerError);
+        return;
+      }
       const resolved = looksLikeRealEmail(result.email)
         ? (result.email as string).toLowerCase()
         : null;
@@ -308,6 +321,10 @@ async function fillMissingEmails(
       kind: "note",
       detail: `Resolved ${resolvedLines.length} existing contact email(s) via ${resolver.name}: ${resolvedLines.join("; ")}.`,
     });
+  }
+  for (const msg of providerErrors) {
+    console.error(`[contacts] ${lead.name}: ${msg}`);
+    await supabase.from("interactions").insert({ lead_id: lead.id, kind: "note", detail: msg });
   }
   return targets.length;
 }

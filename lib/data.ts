@@ -454,11 +454,14 @@ export async function getScannedReplyIds(): Promise<Set<string>> {
 export async function getExistingLeadKeys(): Promise<{
   names: Set<string>;
   domains: Set<string>;
+  /** Every contact email in the CRM, lowercased. */
+  emails: Set<string>;
   displayNames: string[];
 }> {
   const admin = createAdminClient();
   const names = new Set<string>();
   const domains = new Set<string>();
+  const emails = new Set<string>();
   const displayNames: string[] = [];
 
   const addName = (name: string | null | undefined) => {
@@ -493,7 +496,9 @@ export async function getExistingLeadKeys(): Promise<{
   // website does; without this, "X University" and "Lecture Series at X"
   // can both land in the CRM.
   for (const row of contactRows) {
-    const d = orgDomainOfEmail((row as { email: string | null }).email);
+    const email = (row as { email: string | null }).email;
+    if (email) emails.add(email.trim().toLowerCase());
+    const d = orgDomainOfEmail(email);
     if (d) domains.add(d);
   }
 
@@ -522,7 +527,7 @@ export async function getExistingLeadKeys(): Promise<{
     addName((row as { organization: string | null }).organization);
   }
 
-  return { names, domains, displayNames };
+  return { names, domains, emails, displayNames };
 }
 
 export interface DiscoveryRunLead {
@@ -556,6 +561,8 @@ export interface DiscoveryRun {
   repeats: number | null;
   rule_filtered: number | null;
   surplus: number | null;
+  /** Leads added from earlier runs' saved extras (migration 0033). */
+  reused?: number | null;
   rounds: number | null;
   searches: number | null;
   stop_reason: StopReason | null;

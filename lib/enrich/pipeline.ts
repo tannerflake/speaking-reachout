@@ -67,7 +67,13 @@ export async function enrichLeadCore(
   if (drafted.error && drafted.created === 0) {
     const noTargets = drafted.error === NO_TARGETS_ERROR;
     if (!noTargets) out.error = drafted.error;
-    else if (found.withEmail === 0 && found.added === 0 && found.error) {
+    else if (
+      found.withEmail === 0 &&
+      found.error &&
+      // A Hunter quota/key failure is reported even when emailless contacts
+      // were added: it is why they have no email.
+      (found.added === 0 || found.failed.some((f) => f.source === "hunter"))
+    ) {
       out.error = found.error;
     }
     if (drafted.error.startsWith(BLOCKED_PREFIX)) out.blocked = true;

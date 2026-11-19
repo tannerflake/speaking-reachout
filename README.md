@@ -217,8 +217,24 @@ Apply `supabase/migrations/0020_followups.sql` before using this.
   hand. Guessed or merely listed addresses keep their drafts but show "Needs
   verification" and are held. Set `EMAIL_VERIFIER=zerobounce|neverbounce|hunter`
   (+ `ZEROBOUNCE_API_KEY` / `NEVERBOUNCE_API_KEY`) to verify them
-  automatically at queue time. A hard bounce marks the contact `bounced` and
-  it is never emailed again. Migration `0031_deliverability.sql`.
+  automatically at queue time. A catch-all result counts as sendable only when
+  the address is printed on the named page it was sourced from (not a guessed
+  pattern). With a verifier set, the send-queue cron also backfills: every 5
+  minutes it checks up to 8 held contacts that have drafts, releases the valid
+  ones and marks the invalid ones (needs migration 0033). Each check is logged
+  in `api_usage` with credits and an estimated cost
+  (`ZEROBOUNCE_COST_PER_CHECK`, default $0.01). A hard bounce marks the contact
+  `bounced` and it is never emailed again. Migration `0031_deliverability.sql`.
+- **Paid API logging** (`api_usage`). Anthropic, OpenAI, Gemini, Hunter and the
+  email verifier are all logged per call (`provider`, tokens, web searches,
+  credits). Contact search uses Claude, OpenAI, Gemini and Hunter; Perplexity
+  was removed. Hunter quota/key errors are reported as errors (logs, lead
+  notes, Discover summary) and the Dashboard warns below 150 searches left
+  (`HUNTER_LOW_SEARCHES`).
+- **Discover keeps its extras** (`discovery_candidates`, migration 0033).
+  Valid candidates found after a run reaches its count are saved; the next run
+  with the same focus and targeting rules uses ones under 14 days old first,
+  re-checked against the CRM and the current rules.
 - **Plain, personal email** (`lib/outreach/plainEmail.ts`). Plain text
   (quoted-printable), a display-name From (`SENDER_NAME`, else the Gmail
   send-as name), no attachment (set `OUTREACH_ATTACH_ONE_PAGER=true` to bring

@@ -3,6 +3,8 @@ import { describeDiscoveryRules } from "@/lib/claude/rules";
 import { DiscoverForm } from "@/components/DiscoverForm";
 import { DiscoveryHistory } from "@/components/DiscoveryHistory";
 import { DiscoverAutoRefresh } from "@/components/DiscoverAutoRefresh";
+import { HunterWarning } from "@/components/HunterWarning";
+import { getHunterStatus } from "@/lib/contacts/hunterStatus";
 
 export const dynamic = "force-dynamic";
 // Server actions on this page (stop a run, re-queue leads) are quick; the
@@ -10,9 +12,10 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export default async function DiscoverPage() {
-  const [rules, history] = await Promise.all([
+  const [rules, history, hunter] = await Promise.all([
     getActiveRules(),
     getRecentDiscoveryRuns(),
+    getHunterStatus(),
   ]);
   const activeRules = describeDiscoveryRules(rules);
   const searching = history.runs.some((r) => r.status === "running");
@@ -32,6 +35,7 @@ export default async function DiscoverPage() {
           <span className="font-medium">new</span> leads.
         </p>
       </div>
+      <HunterWarning status={hunter} />
       <DiscoverForm activeRules={activeRules} />
       <DiscoveryHistory runs={history.runs} available={history.available} />
       <DiscoverAutoRefresh

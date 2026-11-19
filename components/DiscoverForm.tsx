@@ -12,6 +12,7 @@ import type { DiscoveryProgress } from "@/lib/claude/discovery";
 import {
   dropLines,
   foundLine,
+  reusedLine,
   stopReasonText,
   type RunCounts,
 } from "@/lib/discovery/report";
@@ -226,6 +227,9 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
         repeats: summary.repeats,
         ruleFiltered: summary.ruleFiltered,
         surplus: summary.surplus,
+        reused: summary.reused,
+        reuseDropped: summary.reuseDropped,
+        backlogSaved: summary.backlogSaved,
         saveFailed: summary.saveFailed,
         failedBatches: summary.failedBatches,
         rounds: summary.rounds,
@@ -425,6 +429,7 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
             <p className="text-zinc-700">
               {stopReasonText(summary.stopReason, summary.requested, summary.inserted)}
             </p>
+            {reusedLine(counts) && <p className="text-zinc-700">{reusedLine(counts)}</p>}
             <p className="text-zinc-600">{foundLine(counts)}</p>
             {dropLines(counts).length > 0 && (
               <ul className="list-disc pl-5 text-zinc-600">
@@ -436,6 +441,11 @@ export function DiscoverForm({ activeRules }: { activeRules: string[] }) {
             {summary.errors.length > 0 && (
               <p className="text-rose-700">Search errors: {summary.errors.join("; ")}.</p>
             )}
+            {(summary.warnings ?? []).map((w) => (
+              <p key={w} className="text-rose-700">
+                {w}
+              </p>
+            ))}
             {!summary.runId && (
               <p className="text-zinc-600">
                 This run was not saved to Recent runs (database migration 0030

@@ -84,6 +84,11 @@ export async function resolveContactEmail(
     claudeContact: null,
   });
 
+  if (result.providerError) {
+    // The provider failed (quota / key); this was not a real lookup, so the
+    // contact is not marked as searched and can be retried later.
+    return { provider: resolver.name, error: result.providerError };
+  }
   if (!result.email || !looksLikeRealEmail(result.email)) {
     await supabase
       .from("contacts")
@@ -165,6 +170,7 @@ export async function relookupContact(
     claudeContact: null,
   });
 
+  if (result.providerError) return { provider: resolver.name, error: result.providerError };
   if (!result.email || !looksLikeRealEmail(result.email)) {
     return {
       provider: resolver.name,
@@ -245,11 +251,13 @@ export async function bulkFindContacts(
   let found = 0;
   let skipped = 0;
   let notFound = 0;
+  let providerError: string | null = null;
 
   // Low concurrency to stay polite to the provider API.
   const queue = [...leads];
   async function worker() {
     for (;;) {
+      if (providerError) return;
       const lead = queue.shift();
       if (!lead) return;
 
@@ -266,6 +274,11 @@ export async function bulkFindContacts(
         claudeContact: null,
       });
 
+      if (result.providerError) {
+        // Out of credits / bad key: every later lookup fails the same way.
+        providerError = result.providerError;
+        break;
+      }
       if (!result.email || !looksLikeRealEmail(result.email)) {
         notFound += 1;
         continue;
@@ -316,7 +329,9 @@ export async function bulkFindContacts(
   await Promise.all([worker(), worker()]);
 
   revalidatePath("/admin/leads");
-  return { found, skipped, notFound };
+  return providerError
+    ? { found, skipped, notFound, error: providerError }
+    : { found, skipped, notFound };
 }
 
 /**

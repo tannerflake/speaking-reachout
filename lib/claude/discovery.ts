@@ -127,6 +127,14 @@ export interface CandidateRecord {
   outcome: CandidateOutcome;
   reason: string;
   round: number;
+  /** Saved as an extra by an earlier run and re-checked in this one. */
+  reused?: boolean;
+}
+
+/** A surplus candidate saved by an earlier run (discovery_candidates). */
+export interface BacklogCandidate {
+  id: string;
+  lead: DiscoveredLead;
 }
 
 export type StopReason =
@@ -151,8 +159,12 @@ export interface DiscoveryProgress {
   repeats: number;
   /** Dropped by tailoring rules (incl. the think-tank ban). */
   ruleFiltered: number;
-  /** Valid, but the requested count was already reached. */
+  /** Valid, but the requested count was already reached (saved for later runs). */
   surplus: number;
+  /** Leads added from earlier runs' saved extras (included in `added`). */
+  reused: number;
+  /** Saved extras that failed this run's dedupe or rule checks. */
+  reuseDropped: number;
   /** Passed every check but could not be saved. */
   saveFailed: number;
   failedBatches: number;
@@ -160,6 +172,8 @@ export interface DiscoveryProgress {
 
 export interface DiscoveryResult extends DiscoveryProgress {
   leads: DiscoveredLead[];
+  /** Valid extras found after the target was reached, to save for later. */
+  surplusLeads: DiscoveredLead[];
   stopReason: StopReason;
   candidates: CandidateRecord[];
   /** Distinct search errors (timeouts, API failures), for the run report. */
@@ -170,7 +184,21 @@ export async function discoverLeads(params: {
   count: number;
   focus?: string;
   rules: TailoringRule[];
-  existing: { names: Set<string>; domains: Set<string>; displayNames?: string[] };
+  existing: {
+    names: Set<string>;
+    domains: Set<string>;
+    /** Every contact email already in the CRM (lowercased). */
+    emails?: Set<string>;
+    displayNames?: string[];
+  };
+  /**
+   * Extras saved by earlier runs with the same focus and rules. Tried before
+   * any search, through exactly the same dedupe and rule checks as a fresh
+   * candidate.
+   */
+  backlog?: BacklogCandidate[];
+  /** Told what happened to each backlog candidate this run looked at. */
+  onBacklogOutcome?: (id: string, outcome: CandidateOutcome, reason: string) => void;
   /** Wall-clock budget for the whole run. */
   budgetMs?: number;
   /**
@@ -203,6 +231,7 @@ export async function discoverLeads(params: {
   const runDomains = new Set<string>();
   const proposedNames: string[] = [];
   const survivors: DiscoveredLead[] = [];
+  const surplusLeads: DiscoveredLead[] = [];
   const candidates: CandidateRecord[] = [];
   const errors: string[] = [];
   const p: DiscoveryProgress = {
@@ -214,10 +243,13 @@ export async function discoverLeads(params: {
     repeats: 0,
     ruleFiltered: 0,
     surplus: 0,
+    reused: 0,
+    reuseDropped: 0,
     saveFailed: 0,
     failedBatches: 0,
   };
   let reserved = 0; // accepted leads, reserved before the async resolve/save
+  let roundAbort: AbortController | null = null; // the round in flight
   let unitsStarted = 0;
   let stopped = false;
 
@@ -229,8 +261,19 @@ export async function discoverLeads(params: {
       // progress reporting must never abort the run
     }
   };
-  const record = (c: DiscoveredLead, outcome: CandidateOutcome, reason: string) => {
-    candidates.push({ name: c.name, outcome, reason, round: p.rounds });
+  const record = (
+    c: DiscoveredLead,
+    outcome: CandidateOutcome,
+    reason: string,
+    reused = false,
+  ) => {
+    candidates.push({
+      name: c.name,
+      outcome,
+      reason: reused ? `${reason} (saved by an earlier run)` : reason,
+      round: p.rounds,
+      ...(reused ? { reused: true } : {}),
+    });
   };
   const checkStop = async () => {
     if (stopped) return true;
@@ -241,6 +284,109 @@ export async function discoverLeads(params: {
     }
     return stopped;
   };
+
+  /**
+   * Every candidate, fresh from a search or saved by an earlier run, goes
+   * through this one function: the same rule, dedupe and contact checks, in
+   * the same order. Returns what happened to it.
+   */
+  async function consider(c: DiscoveredLead, backlogId?: string): Promise<CandidateOutcome> {
+    const reused = backlogId !== undefined;
+    const drop = (outcome: CandidateOutcome, reason: string): CandidateOutcome => {
+      if (reused) p.reuseDropped += 1;
+      else if (outcome === "rule") p.ruleFiltered += 1;
+      else if (outcome === "duplicate") p.duplicates += 1;
+      else if (outcome === "repeat") p.repeats += 1;
+      record(c, outcome, reason, reused);
+      return outcome;
+    };
+    proposedNames.push(c.name);
+    // --- synchronous critical section: classify + reserve a slot ---
+    const key = normalizeName(c.name);
+    const domain = domainFromUrl(c.website) ?? domainFromUrl(c.source_url);
+    const reg = registrableDomain(domain);
+    const ruleReason = isThinkTank(c)
+      ? "think tanks don't pay speakers"
+      : rejectedByRule(c);
+    if (!key) return drop("rule", "no usable organization name");
+    if (ruleReason) return drop("rule", ruleReason);
+    if (params.existing.names.has(key)) {
+      return drop("duplicate", "already in the system (same name)");
+    }
+    const existingDomain = [domain, reg].find(
+      (d) => d && params.existing.domains.has(d),
+    );
+    if (existingDomain) {
+      return drop("duplicate", `already in the system (same domain: ${existingDomain})`);
+    }
+    const inlineEmail = c.contact?.email?.trim().toLowerCase();
+    if (inlineEmail && params.existing.emails?.has(inlineEmail)) {
+      return drop("duplicate", `its contact (${inlineEmail}) is already in the system`);
+    }
+    if (
+      runNames.has(key) ||
+      (domain && runDomains.has(domain)) ||
+      (reg && runDomains.has(reg))
+    ) {
+      return drop("repeat", "proposed more than once in this run");
+    }
+    if (reserved >= target) {
+      if (reused) return "surplus"; // not looked at: stays saved for a later run
+      p.surplus += 1;
+      surplusLeads.push(c);
+      record(c, "surplus", "valid, but the requested count was already reached; saved for the next run");
+      return "surplus";
+    }
+    runNames.add(key);
+    if (domain) runDomains.add(domain);
+    if (reg) runDomains.add(reg);
+    reserved += 1;
+    // --- end critical section ---
+
+    // Resolve the contact from what Claude already found inline (free, no
+    // paid provider) and emit immediately so the caller can stream it.
+    let contact: DiscoveredLead["contact"];
+    try {
+      contact = await resolver.resolve({
+        name: c.name,
+        website: c.website,
+        source_url: c.source_url,
+        claudeContact: c.contact ?? null,
+      });
+    } catch {
+      contact = {
+        name: null,
+        role: null,
+        email: null,
+        contact_status: "needs_lookup",
+        source_url: null,
+      };
+    }
+    const lead = { ...c, contact };
+    let saved = true;
+    if (params.onLead) {
+      try {
+        saved = (await params.onLead(lead)) !== false;
+      } catch {
+        saved = false;
+      }
+    }
+    if (saved) {
+      survivors.push(lead);
+      p.added += 1;
+      if (reused) p.reused += 1;
+      record(c, "added", "added as a new lead", reused);
+      // Enough leads: cancel the searches still in flight instead of
+      // paying for candidates that would only be thrown away.
+      if (p.added >= target) roundAbort?.abort();
+      return "added";
+    }
+    // Free the slot so the run keeps looking for a replacement.
+    reserved -= 1;
+    p.saveFailed += 1;
+    record(c, "failed", "could not be saved to the database", reused);
+    return "failed";
+  }
 
   async function runUnit(unitSize: number, unitIndex: number, round: number, abort: AbortController) {
     if (reserved >= target || abort.signal.aborted) return;
@@ -289,102 +435,18 @@ export async function discoverLeads(params: {
 
     p.rawCount += found.length;
 
-    for (const c of found) {
-      proposedNames.push(c.name);
-      // --- synchronous critical section: classify + reserve a slot ---
-      const key = normalizeName(c.name);
-      const domain = domainFromUrl(c.website) ?? domainFromUrl(c.source_url);
-      const reg = registrableDomain(domain);
-      const ruleReason = isThinkTank(c)
-        ? "think tanks don't pay speakers"
-        : rejectedByRule(c);
-      if (!key) {
-        p.ruleFiltered += 1;
-        record(c, "rule", "no usable organization name");
-        continue;
-      }
-      if (ruleReason) {
-        p.ruleFiltered += 1;
-        record(c, "rule", ruleReason);
-        continue;
-      }
-      if (params.existing.names.has(key)) {
-        p.duplicates += 1;
-        record(c, "duplicate", "already in the system (same name)");
-        continue;
-      }
-      const existingDomain = [domain, reg].find(
-        (d) => d && params.existing.domains.has(d),
-      );
-      if (existingDomain) {
-        p.duplicates += 1;
-        record(c, "duplicate", `already in the system (same domain: ${existingDomain})`);
-        continue;
-      }
-      if (
-        runNames.has(key) ||
-        (domain && runDomains.has(domain)) ||
-        (reg && runDomains.has(reg))
-      ) {
-        p.repeats += 1;
-        record(c, "repeat", "proposed more than once in this run");
-        continue;
-      }
-      if (reserved >= target) {
-        p.surplus += 1;
-        record(c, "surplus", "valid, but the requested count was already reached");
-        continue;
-      }
-      runNames.add(key);
-      if (domain) runDomains.add(domain);
-      if (reg) runDomains.add(reg);
-      reserved += 1;
-      // --- end critical section ---
-
-      // Resolve the contact from what Claude already found inline (free, no
-      // paid provider) and emit immediately so the caller can stream it.
-      let contact: DiscoveredLead["contact"];
-      try {
-        contact = await resolver.resolve({
-          name: c.name,
-          website: c.website,
-          source_url: c.source_url,
-          claudeContact: c.contact ?? null,
-        });
-      } catch {
-        contact = {
-          name: null,
-          role: null,
-          email: null,
-          contact_status: "needs_lookup",
-          source_url: null,
-        };
-      }
-      const lead = { ...c, contact };
-      let saved = true;
-      if (params.onLead) {
-        try {
-          saved = (await params.onLead(lead)) !== false;
-        } catch {
-          saved = false;
-        }
-      }
-      if (saved) {
-        survivors.push(lead);
-        p.added += 1;
-        record(c, "added", "added as a new lead");
-        // Enough leads: cancel the searches still in flight instead of
-        // paying for candidates that would only be thrown away.
-        if (p.added >= target) abort.abort();
-      } else {
-        // Free the slot so the run keeps looking for a replacement.
-        reserved -= 1;
-        p.saveFailed += 1;
-        record(c, "failed", "could not be saved to the database");
-      }
-    }
+    for (const c of found) await consider(c);
     await progress();
   }
+
+  // Earlier runs' saved extras first: free, and already known to be good
+  // fits. Each is re-checked now against the CRM and the active rules.
+  for (const b of params.backlog ?? []) {
+    if (reserved >= target) break;
+    const outcome = await consider(b.lead, b.id);
+    params.onBacklogOutcome?.(b.id, outcome, candidates[candidates.length - 1]?.reason ?? "");
+  }
+  if (p.reused > 0 || p.reuseDropped > 0) await progress();
 
   let stopReason: StopReason | null = null;
   let dryRounds = 0;
@@ -402,7 +464,9 @@ export async function discoverLeads(params: {
     // be duplicates, ask for proportionally more to still land the target.
     const need = target - reserved;
     const yieldSoFar =
-      p.rawCount > 0 ? Math.min(1, Math.max(0.15, p.added / p.rawCount)) : 0.5;
+      p.rawCount > 0
+        ? Math.min(1, Math.max(0.15, (p.added - p.reused) / p.rawCount))
+        : 0.5;
     const wanted = Math.ceil(need / yieldSoFar) + 1;
     const units = Math.max(
       1,
@@ -415,6 +479,7 @@ export async function discoverLeads(params: {
     const addedBefore = p.added;
     const failedBefore = p.failedBatches;
     const abort = new AbortController();
+    roundAbort = abort;
     // Stop reaches searches that are already in flight.
     const stopPoll = setInterval(() => {
       void checkStop().then((s) => s && abort.abort());
@@ -437,7 +502,7 @@ export async function discoverLeads(params: {
       p.failedBatches - failedBefore >= units ? failedRounds + 1 : 0;
   }
 
-  return { ...p, leads: survivors, stopReason, candidates, errors };
+  return { ...p, leads: survivors, surplusLeads, stopReason, candidates, errors };
 }
 
 /** Does this search angle point at something the active rules exclude? */

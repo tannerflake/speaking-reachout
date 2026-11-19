@@ -10,6 +10,7 @@ import { DiscoveryRunActions } from "@/components/DiscoveryRunActions";
 import {
   dropLines,
   foundLine,
+  reusedLine,
   stopReasonText,
   type RunCounts,
 } from "@/lib/discovery/report";
@@ -190,6 +191,7 @@ function RunNote({ run }: { run: DiscoveryRun }) {
     repeats: run.repeats,
     ruleFiltered: run.rule_filtered,
     surplus: run.surplus,
+    reused: run.reused ?? null,
     failedBatches: run.failed_batches,
     rounds: run.rounds,
     searches: run.searches,
@@ -208,10 +210,12 @@ function RunNote({ run }: { run: DiscoveryRun }) {
   if (run.status === "error") lines.push(`Failed: ${run.error ?? "unknown error"}.`);
   if (run.status === "done")
     lines.push(stopReasonText(run.stop_reason, run.requested, run.inserted));
+  const reused = reusedLine(counts);
+  if (reused) lines.push(reused);
   if (run.raw_count !== null) lines.push(foundLine(counts));
   const drops = dropLines(counts);
   if (drops.length > 0) lines.push(`Not added: ${drops.join("; ")}.`);
-  if (run.status === "done" && run.error) lines.push(`Search errors: ${run.error}.`);
+  if (run.status === "done" && run.error) lines.push(`Errors: ${run.error}.`);
   const text = lines.filter(Boolean);
   if (text.length === 0) return null;
   return (

@@ -189,13 +189,38 @@ export function discoveryRejecter(
     if (include.size && (!country || !include.has(country)))
       return `rule only allows other countries (this one: ${c.location_country || "unknown"})`;
     if (keywords.length) {
-      const hay = `${c.name} ${c.description}`.toLowerCase();
+      // Region and website count too: "no Utah organizations" must catch a
+      // Salt Lake City chamber whose name and blurb never say "Utah".
+      const region = c.location_region ?? "";
+      const hay = `${c.name} ${c.description} ${region} ${c.website ?? ""}`.toLowerCase();
       const hit = keywords.find((k) => hay.includes(k));
       if (hit) return `rule excludes anything mentioning "${hit}"`;
+      // A state named in a rule also matches its postal code ("UT", "AZ").
+      const regionTokens = region.toUpperCase().split(/[^A-Z]+/).filter(Boolean);
+      const byCode = keywords.find((k) => {
+        const code = US_STATE_CODES[k];
+        return code !== undefined && regionTokens.includes(code);
+      });
+      if (byCode) return `rule excludes anything in ${byCode.replace(/\b\w/g, (m) => m.toUpperCase())}`;
     }
     return null;
   };
 }
+
+const US_STATE_CODES: Record<string, string> = {
+  alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA",
+  colorado: "CO", connecticut: "CT", delaware: "DE", florida: "FL", georgia: "GA",
+  hawaii: "HI", idaho: "ID", illinois: "IL", indiana: "IN", iowa: "IA",
+  kansas: "KS", kentucky: "KY", louisiana: "LA", maine: "ME", maryland: "MD",
+  massachusetts: "MA", michigan: "MI", minnesota: "MN", mississippi: "MS",
+  missouri: "MO", montana: "MT", nebraska: "NE", nevada: "NV",
+  "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+  "north carolina": "NC", "north dakota": "ND", ohio: "OH", oklahoma: "OK",
+  oregon: "OR", pennsylvania: "PA", "rhode island": "RI", "south carolina": "SC",
+  "south dakota": "SD", tennessee: "TN", texas: "TX", utah: "UT", vermont: "VT",
+  virginia: "VA", washington: "WA", "west virginia": "WV", wisconsin: "WI",
+  wyoming: "WY",
+};
 
 /**
  * Everything the active rules steer discovery away from (excluded keywords
@@ -212,4 +237,45 @@ export function discoveryAvoidTerms(rules: TailoringRule[]): string[] {
   ]
     .map((t) => t.toLowerCase().replace(/_/g, " ").trim())
     .filter(Boolean);
+}
+
+/**
+ * What a saved Discover candidate must match to be reused by a later run:
+ * the same operator focus, and the same targeting rules that steered the
+ * search (for a focused run only the "do not return" types matter, since
+ * that is all of targeting a focused search sees). Discovery filters are
+ * not part of the key: they are re-applied to every reused candidate, so a
+ * filter added since (like "no Utah or Arizona") still removes it.
+ */
+export function discoveryReuseKey(
+  rules: TailoringRule[],
+  focus: string | undefined,
+): { focusKey: string; rulesKey: string; snapshot: unknown[] } {
+  const focusKey = (focus ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const targets = targetingValues(rules).map((t) =>
+    focusKey
+      ? { deprioritize_types: [...(t.deprioritize_types ?? [])].sort() }
+      : {
+          prioritize_types: [...(t.prioritize_types ?? [])].sort(),
+          deprioritize_types: [...(t.deprioritize_types ?? [])].sort(),
+          focus: t.focus ?? null,
+        },
+  );
+  const rulesKey = targets
+    .map((t) => JSON.stringify(t))
+    .sort()
+    .join("|");
+  const snapshot = rules
+    .filter(
+      (r) =>
+        r.is_active &&
+        (r.rule_type === "discovery_filter" || r.rule_type === "targeting"),
+    )
+    .map((r) => ({
+      id: r.id,
+      rule_type: r.rule_type,
+      raw_instruction: r.raw_instruction,
+      structured_value: r.structured_value,
+    }));
+  return { focusKey, rulesKey, snapshot };
 }

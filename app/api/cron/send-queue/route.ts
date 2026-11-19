@@ -1,7 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getEnv } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { runSendTick } from "@/lib/outreach/send";
+import { queueOutreach, runSendTick } from "@/lib/outreach/send";
+import { verifyHeldContacts } from "@/lib/contacts/deliverability";
+import { emailVerifierName } from "@/lib/contacts/verify";
 import { scanInboxForReplies } from "@/lib/gmail/replyScan";
 import { kickContext, kickEnrichWorkers } from "@/lib/enrich/queue";
 
@@ -42,5 +44,24 @@ export async function GET(request: NextRequest) {
   // lib/enrich/queue.ts). Every ten minutes is plenty.
   const enrichWorkers =
     minute % 10 === 0 ? await kickEnrichWorkers(admin, kickContext(request.headers)) : undefined;
-  return NextResponse.json({ ok: true, ...summary, replyScan, enrichWorkers });
+  // Backfill: with an email verifier configured (EMAIL_VERIFIER), check a
+  // few held "needs verification" addresses every five minutes and release
+  // the valid ones into the normal flow.
+  let heldVerification;
+  if (minute % 5 === 3 && emailVerifierName()) {
+    heldVerification = await verifyHeldContacts(admin, {
+      limit: 8,
+      requeue: (outreachIds) => queueOutreach(admin, { outreachIds }),
+    });
+    if (heldVerification.error) {
+      console.error(`[send-queue] held-address verification: ${heldVerification.error}`);
+    }
+  }
+  return NextResponse.json({
+    ok: true,
+    ...summary,
+    replyScan,
+    enrichWorkers,
+    heldVerification,
+  });
 }

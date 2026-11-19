@@ -1,4 +1,5 @@
 import { getEnv } from "@/lib/env";
+import { recordProviderUsage } from "@/lib/claude/usage";
 
 /**
  * Pluggable mailbox verification, run before an unverified address is allowed
@@ -12,8 +13,14 @@ import { getEnv } from "@/lib/env";
  *   EMAIL_VERIFIER=hunter       (uses HUNTER_API_KEY; costs Hunter credits)
  * Setting ZEROBOUNCE_API_KEY or NEVERBOUNCE_API_KEY alone also selects it.
  *
- * Only a definite "valid" lets an address through. Catch-all / accept-all
- * domains, "unknown" and "risky" results stay held for a human to decide.
+ * A definite "valid" lets an address through. A catch-all / accept-all result
+ * ("risky") is sendable only when the address is printed on the named page it
+ * was sourced from (see lib/contacts/deliverability.ts); "unknown" stays held.
+ *
+ * Every check is logged in api_usage (feature "verify") with its credits and
+ * an estimated cost: ZEROBOUNCE_COST_PER_CHECK / NEVERBOUNCE_COST_PER_CHECK
+ * (USD, default 0.01 / 0.008, list prices for small packs; set your plan's
+ * rate). ZeroBounce does not charge for "unknown" results.
  */
 
 export type VerifyOutcome = "valid" | "invalid" | "risky" | "unknown";
@@ -23,6 +30,8 @@ export interface VerifyResult {
   /** Provider's own status string, for the activity log. */
   detail: string;
   provider: string;
+  /** Credits the check consumed (0 when the provider doesn't bill it). */
+  credits?: number;
 }
 
 interface Verifier {
@@ -52,7 +61,8 @@ class ZeroBounce implements Verifier {
           : status === "catch-all"
             ? "risky"
             : "unknown";
-    return { outcome, detail, provider: this.name };
+    // ZeroBounce refunds "unknown" results.
+    return { outcome, detail, provider: this.name, credits: status === "unknown" ? 0 : 1 };
   }
 }
 
@@ -115,8 +125,51 @@ export function emailVerifierName(): string | null {
   return getEmailVerifier()?.name ?? null;
 }
 
+function costPerCheck(provider: string): number | null {
+  const env =
+    provider === "zerobounce"
+      ? getEnv("ZEROBOUNCE_COST_PER_CHECK")
+      : provider === "neverbounce"
+        ? getEnv("NEVERBOUNCE_COST_PER_CHECK")
+        : undefined;
+  const n = Number(env);
+  if (env && Number.isFinite(n) && n >= 0) return n;
+  if (provider === "zerobounce") return 0.01;
+  if (provider === "neverbounce") return 0.008;
+  return null; // Hunter: plan credits, no per-check price
+}
+
 export async function verifyEmailAddress(email: string): Promise<VerifyResult | null> {
   const v = getEmailVerifier();
   if (!v) return null;
-  return v.verify(email.trim().toLowerCase());
+  const started = Date.now();
+  try {
+    const result = await v.verify(email.trim().toLowerCase());
+    const credits = result.credits ?? (result.detail === "pending" ? 0 : 1);
+    const unit = costPerCheck(v.name);
+    void recordProviderUsage({
+      provider: v.name,
+      feature: "verify",
+      model: "single-check",
+      durationMs: Date.now() - started,
+      ok: true,
+      credits,
+      costUsd: unit === null ? null : Math.round(unit * credits * 10_000) / 10_000,
+    });
+    return result;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[verify] ${v.name} check failed: ${msg}`);
+    void recordProviderUsage({
+      provider: v.name,
+      feature: "verify",
+      model: "single-check",
+      durationMs: Date.now() - started,
+      ok: false,
+      error: msg,
+      credits: 0,
+      costUsd: 0,
+    });
+    throw e;
+  }
 }
