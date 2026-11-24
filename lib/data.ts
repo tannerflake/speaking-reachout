@@ -36,6 +36,13 @@ import type {
   VoiceProfile,
 } from "@/lib/types";
 import { LEAD_STATUSES, PIPELINE_STATUSES } from "@/lib/types";
+import {
+  REVISIT_LOOKAHEAD_DAYS,
+  REVISIT_TERMINAL_STATUSES,
+  effectiveOrigin,
+  localDatePlus,
+  type EffectiveOrigin,
+} from "@/lib/attribution";
 
 // Readers that also run in background jobs (no operator cookies) accept an
 // explicit client; without one they use the request's cookie-bound client.
@@ -69,6 +76,12 @@ export interface LeadListRow extends Lead {
    * started the conversation, "gmail" means it was started by hand.
    */
   originatedVia: OutreachChannel | null;
+  /**
+   * What badges, filters and sorting show: the attribution override when one
+   * is set, else originatedVia. originatedVia stays the raw "has anything
+   * been sent" signal that bulk runs rely on.
+   */
+  origin: EffectiveOrigin;
   /**
    * Why the engagement guard refuses this lead (the organization is already
    * in a conversation), or null. Set from the CRM check that blocks drafting,
@@ -117,21 +130,32 @@ export async function getRecentInteractions(
 
 export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
   const supabase = await createClient();
-  let query = supabase
-    .from("leads")
-    .select(
-      "*, contacts(id, email, contact_status), interactions(created_at), outreach(status, sent_via, sent_at, contact_id, error, scheduled_for)",
-    )
-    .order("created_at", { ascending: false });
+  const build = (contactCols: string) => {
+    let query = supabase
+      .from("leads")
+      .select(
+        `*, contacts(${contactCols}), interactions(created_at), outreach(status, sent_via, sent_at, contact_id, error, scheduled_for)`,
+      )
+      .order("created_at", { ascending: false });
+    if (filters.status) query = query.eq("status", filters.status);
+    if (filters.type) query = query.eq("type", filters.type);
+    if (filters.country) query = query.eq("location_country", filters.country);
+    if (filters.search) query = query.ilike("name", `%${filters.search}%`);
+    return query;
+  };
 
-  if (filters.status) query = query.eq("status", filters.status);
-  if (filters.type) query = query.eq("type", filters.type);
-  if (filters.country) query = query.eq("location_country", filters.country);
-  if (filters.search) query = query.ilike("name", `%${filters.search}%`);
-
-  const { data } = await query;
+  // referred_by_contact_id arrives with migration 0034; fall back without it.
+  const withReferrals = await build("id, email, contact_status, referred_by_contact_id");
+  const { data } = withReferrals.error
+    ? await build("id, email, contact_status")
+    : withReferrals;
   type Row = Lead & {
-    contacts: { id: string; email: string | null; contact_status: ContactStatus }[];
+    contacts: {
+      id: string;
+      email: string | null;
+      contact_status: ContactStatus;
+      referred_by_contact_id?: string | null;
+    }[];
     interactions: { created_at: string }[];
     outreach: {
       status: string;
@@ -142,7 +166,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
       scheduled_for: string | null;
     }[];
   };
-  const rows = (data as Row[]) ?? [];
+  const rows = (data as unknown as Row[] | null) ?? [];
   // Only leads nothing has been sent to yet can be stuck behind the guard.
   let crmBlocked = new Map<string, string>();
   try {
@@ -165,7 +189,10 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
     const last = activityTimes.length
       ? new Date(Math.max(...activityTimes)).toISOString()
       : row.updated_at;
-    const contacts = row.contacts ?? [];
+    const allContacts = row.contacts ?? [];
+    // Referred contacts are emailed by hand, never drafted, so they don't
+    // count toward draft coverage.
+    const contacts = allContacts.filter((c) => !c.referred_by_contact_id);
     // Counted per email address, the way drafting works: two contact rows
     // sharing an inbox need one draft, not two.
     const emailable = new Set(
@@ -176,8 +203,9 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
     const undrafted = draftTargets(contacts, row.outreach ?? []).length;
     return {
       ...row,
-      contactsCount: contacts.length,
-      hasContactEmail: emailable.size > 0,
+      contactsCount: allContacts.length,
+      hasContactEmail:
+        emailable.size > 0 || allContacts.some((c) => looksLikeRealEmail(c.email)),
       emailableContacts: emailable.size,
       draftedContacts: Math.max(0, emailable.size - undrafted),
       lastActivity: last,
@@ -194,6 +222,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
         return sendHoldReason(c) === "needs_verification";
       }).length,
       originatedVia: firstSent?.sent_via ?? null,
+      origin: effectiveOrigin(row, firstSent?.sent_via ?? null),
       blockedReason:
         crmBlocked.get(row.id) ??
         (row.outreach ?? []).find((o) => o.status === "blocked")?.error ??
@@ -330,22 +359,38 @@ export async function getDueFollowupCount(): Promise<number> {
   return count ?? 0;
 }
 
+export type DueRevisit = Pick<
+  Lead,
+  "id" | "name" | "status" | "revisit_on" | "revisit_note"
+> & { overdue: boolean };
+
 /**
- * Back burner leads whose revisit date is today or earlier, oldest first.
- * Returns [] (rather than throwing) until migration 0029 adds revisit_on.
+ * Leads with a revisit date up to REVISIT_LOOKAHEAD_DAYS ahead (overdue
+ * ones included), any status except closed / junk / merged, soonest first.
+ * Only surfaces them: nothing is ever sent because a date arrived.
+ * Returns [] (rather than throwing) if the columns are missing.
  */
-export async function getDueRevisits(): Promise<
-  Array<Pick<Lead, "id" | "name" | "revisit_on">>
-> {
+export async function getDueRevisits(): Promise<DueRevisit[]> {
   const supabase = await createClient();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDatePlus(0);
+  const horizon = localDatePlus(REVISIT_LOOKAHEAD_DAYS);
   const { data } = await supabase
     .from("leads")
-    .select("id, name, revisit_on")
-    .eq("status", "back_burner")
-    .lte("revisit_on", today)
+    .select("*")
+    .not("revisit_on", "is", null)
+    .lte("revisit_on", horizon)
+    .not("status", "in", `(${REVISIT_TERMINAL_STATUSES.join(",")})`)
     .order("revisit_on", { ascending: true });
-  return (data as Array<Pick<Lead, "id" | "name" | "revisit_on">>) ?? [];
+  return ((data as Lead[] | null) ?? [])
+    .filter((l) => !l.merged_into_id)
+    .map((l) => ({
+      id: l.id,
+      name: l.name,
+      status: l.status,
+      revisit_on: l.revisit_on,
+      revisit_note: l.revisit_note ?? null,
+      overdue: (l.revisit_on as string) <= today,
+    }));
 }
 
 export async function getActiveRules(db?: Db): Promise<TailoringRule[]> {

@@ -75,28 +75,49 @@ export default async function DashboardPage() {
         </p>
       </section>
 
-      {/* Back burner leads whose revisit date has arrived */}
+      {/* Leads whose revisit date is here or within the next 14 days. Only
+          surfaces them; nothing is sent automatically. */}
       {dueRevisits.length > 0 && (
         <section>
           <h2 className="mb-2 text-sm font-medium text-zinc-500">
             Due to revisit
+            <span className="ml-2 text-xs font-normal text-zinc-400">
+              {dueRevisits.filter((l) => l.overdue).length} overdue,{" "}
+              {dueRevisits.filter((l) => !l.overdue).length} in the next 14 days
+            </span>
           </h2>
           <div className="rounded-lg border border-sky-200 bg-white">
             <ul className="divide-y divide-zinc-100">
               {dueRevisits.map((l) => (
-                <li
-                  key={l.id}
-                  className="flex items-center justify-between gap-4 px-4 py-2.5 text-sm"
-                >
-                  <Link
-                    href={`/admin/leads/${l.id}`}
-                    className="min-w-0 truncate text-blue-600 hover:underline"
-                  >
-                    {l.name}
-                  </Link>
-                  <span className="shrink-0 text-xs text-zinc-500">
-                    Revisit on {formatDate(`${l.revisit_on}T12:00:00`)}
-                  </span>
+                <li key={l.id} className="px-4 py-2.5 text-sm">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Link
+                        href={`/admin/leads/${l.id}`}
+                        className="min-w-0 truncate text-blue-600 hover:underline"
+                      >
+                        {l.name}
+                      </Link>
+                      <span
+                        className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusClasses(
+                          l.status,
+                        )}`}
+                      >
+                        {statusLabel(l.status)}
+                      </span>
+                    </div>
+                    <span
+                      className={`shrink-0 text-xs ${
+                        l.overdue ? "font-medium text-rose-700" : "text-zinc-500"
+                      }`}
+                    >
+                      {l.overdue ? "Overdue: " : "Upcoming: "}
+                      Revisit on {formatDate(`${l.revisit_on}T12:00:00`)}
+                    </span>
+                  </div>
+                  {l.revisit_note && (
+                    <p className="mt-0.5 text-xs text-zinc-500">{l.revisit_note}</p>
+                  )}
                 </li>
               ))}
             </ul>

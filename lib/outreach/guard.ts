@@ -68,6 +68,7 @@ export type ConflictKind =
   | "crm_status"
   | "crm_reply"
   | "crm_manual_outreach"
+  | "crm_referral"
   | "gmail_inbound"
   | "gmail_outbound"
   | "gmail_mention";
@@ -125,6 +126,9 @@ interface LeadRow {
 interface ContactRow {
   lead_id: string;
   email: string | null;
+  name?: string | null;
+  /** Set on a referred contact (migration 0034). */
+  referred_by_contact_id?: string | null;
 }
 interface OutreachRow {
   id: string;
@@ -161,6 +165,8 @@ export async function resolveOrganization(
   members: LeadRow[];
   /** Addresses at shared event-company domains: matched per person only. */
   sharedAddresses: Set<string>;
+  /** Referred contacts on any lead in the org (handled by hand). */
+  referrals: ContactRow[];
 }> {
   const snap = await loadOrgSnapshot(db);
   const org = orgMembers(snap, leadId, extraEmails);
@@ -207,7 +213,13 @@ async function loadOrgSnapshot(db: Db): Promise<OrgSnapshot> {
     selectAll<LeadRow>(() =>
       db.from("leads").select("id, name, name_normalized, status, website"),
     ),
-    selectAll<ContactRow>(() => db.from("contacts").select("id, lead_id, email")),
+    // referred_by_contact_id arrives with migration 0034; read without it
+    // until then rather than failing the guard.
+    selectAll<ContactRow>(() =>
+      db.from("contacts").select("id, lead_id, email, name, referred_by_contact_id"),
+    ).catch(() =>
+      selectAll<ContactRow>(() => db.from("contacts").select("id, lead_id, email")),
+    ),
   ]);
 
   // Domains per lead: website + every contact's org email domain.
@@ -231,7 +243,13 @@ function orgMembers(
   snap: OrgSnapshot,
   leadId: string,
   extraEmails: Array<string | null | undefined> = [],
-): { lead: LeadRow; domains: Set<string>; members: LeadRow[] } {
+): {
+  lead: LeadRow;
+  domains: Set<string>;
+  members: LeadRow[];
+  /** Referred contacts on any lead in the org (handled by hand). */
+  referrals: ContactRow[];
+} {
   const { leads, domainsByLead } = snap;
   const lead = leads.find((l) => l.id === leadId);
   if (!lead) throw new Error("Lead not found.");
@@ -260,7 +278,11 @@ function orgMembers(
     }
     if (same) members.push(other);
   }
-  return { lead, domains, members };
+  const memberIds = new Set(members.map((m) => m.id));
+  const referrals = snap.contacts.filter(
+    (c) => c.referred_by_contact_id && memberIds.has(c.lead_id),
+  );
+  return { lead, domains, members, referrals };
 }
 
 const SENT_OUTREACH_SELECT =
@@ -271,8 +293,25 @@ function crmConflicts(
   leadId: string,
   members: LeadRow[],
   sentOutreach: OutreachRow[],
+  referrals: ContactRow[] = [],
 ): EngagementConflict[] {
   const conflicts: EngagementConflict[] = [];
+  // --- 0. CRM: someone at the org referred us to a colleague -------------
+  // That conversation is being handled by hand (Jeff/Cheryl).
+  const referredLeads = new Set<string>();
+  for (const r of referrals) {
+    if (referredLeads.has(r.lead_id)) continue;
+    referredLeads.add(r.lead_id);
+    const name = members.find((m) => m.id === r.lead_id)?.name ?? null;
+    conflicts.push({
+      kind: "crm_referral",
+      leadId: r.lead_id,
+      leadName: name,
+      detail: `${r.name || r.email || "A contact"} was referred to us by someone at the organization${
+        r.lead_id === leadId ? "" : ` (lead "${name}")`
+      }; that conversation is handled by hand.`,
+    });
+  }
   // --- 1. CRM: status across every lead in the org ------------------------
   for (const m of members) {
     if (ENGAGED_STATUSES.includes(m.status)) {
@@ -345,8 +384,8 @@ export async function crmBlockReasons(
   ]);
   for (const id of leadIds) {
     if (!snap.leads.some((l) => l.id === id)) continue;
-    const { members, domains } = orgMembers(snap, id);
-    const conflicts = crmConflicts(id, members, sent);
+    const { members, domains, referrals } = orgMembers(snap, id);
+    const conflicts = crmConflicts(id, members, sent, referrals);
     if (conflicts.length === 0) continue;
     out.set(
       id,
@@ -428,7 +467,7 @@ export async function checkEngagementGuard(
     batch?: GuardBatch;
   } = {},
 ): Promise<EngagementGuardResult> {
-  const { domains, members, sharedAddresses } = await resolveOrganization(db, leadId, [
+  const { domains, members, sharedAddresses, referrals } = await resolveOrganization(db, leadId, [
     opts.contactEmail,
   ]);
   const memberIds = members.map((m) => m.id);
@@ -444,6 +483,7 @@ export async function checkEngagementGuard(
     leadId,
     members,
     (outreachData ?? []) as unknown as OutreachRow[],
+    referrals,
   );
 
   // --- 3. Live mailbox -----------------------------------------------------

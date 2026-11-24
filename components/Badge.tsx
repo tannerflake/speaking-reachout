@@ -9,9 +9,9 @@ import type {
   ContactStatus,
   LeadSource,
   LeadStatus,
-  OutreachChannel,
   OutreachStatus,
 } from "@/lib/types";
+import { originValueLabel, type OriginValue } from "@/lib/attribution";
 
 function Pill({
   children,
@@ -53,17 +53,26 @@ export function OutreachStatusBadge({ status }: { status: OutreachStatus }) {
   return <Pill className={outreachStatusClasses(status)}>{label}</Pill>;
 }
 
-export function originLabel(via: OutreachChannel): string {
-  return via === "app" ? "Sent via app" : "Sent from Gmail";
+export function originLabel(via: OriginValue): string {
+  return originValueLabel(via);
 }
 
 /**
  * Who started the conversation with this lead. "Sent via app" means the
  * operator sent the first outreach here (commissionable); "Sent from Gmail"
- * means it was sent by hand and imported. Renders nothing until something has
- * been sent.
+ * means it was sent by hand and imported; "Not via app" only comes from an
+ * operator override. Renders nothing until something has been sent (or an
+ * override is set). An override shows "(overridden)"; hover for the reason.
  */
-export function OriginBadge({ via }: { via: OutreachChannel | null }) {
+export function OriginBadge({
+  via,
+  overridden = false,
+  reason,
+}: {
+  via: OriginValue | null;
+  overridden?: boolean;
+  reason?: string | null;
+}) {
   if (!via) return null;
   return (
     <Pill
@@ -72,8 +81,55 @@ export function OriginBadge({ via }: { via: OutreachChannel | null }) {
           ? "border-emerald-200 bg-emerald-50 text-emerald-700"
           : "border-amber-200 bg-amber-50 text-amber-800"
       }
+      title={overridden ? `Attribution overridden: ${reason ?? "no reason recorded"}` : undefined}
     >
       {originLabel(via)}
+      {overridden && <span className="ml-1 text-[10px] font-normal opacity-80">(overridden)</span>}
+    </Pill>
+  );
+}
+
+/**
+ * "Revisit <date>" on a lead row: rose once the date has arrived, sky while
+ * it is still ahead. Renders nothing without a date.
+ */
+export function RevisitBadge({ on, note }: { on: string | null | undefined; note?: string | null }) {
+  if (!on) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = on <= today;
+  const label = new Date(`${on}T12:00:00`).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  return (
+    <Pill
+      className={
+        overdue
+          ? "border-rose-200 bg-rose-50 text-rose-700"
+          : "border-sky-200 bg-sky-50 text-sky-700"
+      }
+      title={`${overdue ? "Overdue: revisit was due" : "Revisit on"} ${on}${note ? `. ${note}` : ""}`}
+    >
+      Revisit {label}
+      {overdue ? " (due)" : ""}
+    </Pill>
+  );
+}
+
+/** Shown on a duplicate lead that was folded into another one. */
+export function MergedBadge() {
+  return <Pill className="border-zinc-300 bg-zinc-100 text-zinc-600">Merged</Pill>;
+}
+
+/** A contact someone at the org pointed us to; handled by hand. */
+export function ReferredBadge({ by }: { by: string }) {
+  return (
+    <Pill
+      className="border-violet-200 bg-violet-50 text-violet-700"
+      title="Referred contact: never cold-emailed or followed up automatically"
+    >
+      Referred by {by}
     </Pill>
   );
 }

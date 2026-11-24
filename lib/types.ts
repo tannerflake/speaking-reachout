@@ -76,6 +76,9 @@ export type OutreachStatus = "draft" | "queued" | "sent" | "failed" | "blocked";
  */
 export type OutreachChannel = "app" | "gmail";
 
+/** Operator override of who started the conversation (migration 0034). */
+export type AttributionOverride = "app" | "not_app";
+
 export type RuleType =
   | "discovery_filter"
   | "copy_style"
@@ -101,8 +104,20 @@ export interface Lead {
   fit_rationale: string | null;
   suggested_topics: string[];
   status: LeadStatus;
-  /** Back burner leads: when to pick the conversation back up (YYYY-MM-DD). */
+  /** When to pick the conversation back up (YYYY-MM-DD); any status. */
   revisit_on: string | null;
+  /** Why / what to do on the revisit date (migration 0034). */
+  revisit_note?: string | null;
+  /** Set when this duplicate was merged into another lead (migration 0034). */
+  merged_into_id?: string | null;
+  /**
+   * Explicit attribution override (migration 0034). When set, it wins over
+   * the channel of the first sent outreach everywhere origin is shown.
+   */
+  attribution_override?: AttributionOverride | null;
+  attribution_override_reason?: string | null;
+  attribution_override_by?: string | null;
+  attribution_override_at?: string | null;
   source: LeadSource;
   name_normalized: string;
   created_at: string;
@@ -132,6 +147,14 @@ export interface Contact {
   verification_checked_at?: string | null;
   /** That check's result, e.g. "zerobounce:catch-all" (migration 0033). */
   verification_result?: string | null;
+  /**
+   * The contact who pointed us to this person ("talk to X instead"), on the
+   * same lead (migration 0034). Referred contacts are handled by hand: never
+   * cold-emailed or followed up automatically.
+   */
+  referred_by_contact_id?: string | null;
+  /** Optional phone number (migration 0034). */
+  phone?: string | null;
   created_at: string;
 }
 

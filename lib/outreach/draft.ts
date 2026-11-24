@@ -29,9 +29,12 @@ export async function draftingBlocked(
   if (acknowledged) return null;
   const { data: lead } = await db
     .from("leads")
-    .select("status")
+    .select("*")
     .eq("id", leadId)
     .maybeSingle();
+  if ((lead as { merged_into_id?: string | null } | null)?.merged_into_id) {
+    return `${BLOCKED_PREFIX} This lead was merged into another lead; work on that one instead.`;
+  }
   if ((lead as { status: string } | null)?.status === "blocked") {
     return `${BLOCKED_PREFIX} This lead is marked Already in contact. Use "Draft anyway" if this is deliberate.`;
   }
@@ -88,6 +91,8 @@ export function draftTargets<C extends { id: string; email: string | null }>(
   const targets: C[] = [];
   for (const c of contacts) {
     if (!looksLikeRealEmail(c.email) || covered.has(c.id)) continue;
+    // Referred contacts are written to by hand, never cold-drafted.
+    if ((c as { referred_by_contact_id?: string | null }).referred_by_contact_id) continue;
     // A bounced or verifier-rejected address will never be sent to.
     const status = (c as { contact_status?: string }).contact_status;
     if (status === "bounced" || status === "invalid") continue;

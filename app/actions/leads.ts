@@ -19,18 +19,74 @@ async function logInteraction(
   await supabase.from("interactions").insert({ lead_id: leadId, kind, detail });
 }
 
+/**
+ * Write revisit_on / revisit_note. revisit_note arrives with migration 0034;
+ * before it is applied a date-only change still saves (a note can't).
+ */
+async function writeRevisit(
+  leadId: string,
+  patch: Record<string, unknown> & { revisit_on: string | null; revisit_note: string | null },
+): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("leads").update(patch).eq("id", leadId);
+  if (!error) return {};
+  if (/revisit_note/.test(error.message)) {
+    if (patch.revisit_note) {
+      return {
+        error:
+          "Revisit notes need database migration 0034 to be applied. Save without a note, or apply the migration.",
+      };
+    }
+    const { revisit_note: _omit, ...rest } = patch;
+    void _omit;
+    const retry = await supabase.from("leads").update(rest).eq("id", leadId);
+    return retry.error ? { error: retry.error.message } : {};
+  }
+  return { error: error.message };
+}
+
+function validRevisitDate(value: string | null | undefined): string | null | false {
+  const v = value?.trim() || null;
+  if (v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  return v;
+}
+
+/**
+ * Change a lead's status. Moving to Back burner can carry an optional
+ * revisit date and note in the same step (both may be left blank).
+ */
 export async function updateLeadStatus(
   leadId: string,
   status: LeadStatus,
-): Promise<void> {
+  revisit?: { on: string | null; note: string | null },
+): Promise<{ error?: string }> {
   const supabase = await createClient();
+  const revisitOn = revisit ? validRevisitDate(revisit.on) : null;
+  if (revisitOn === false) return { error: "Use a date like 2027-03-15." };
+  const revisitNote = revisit?.note?.trim() || null;
+
   const { error } = await supabase
     .from("leads")
     .update({ status })
     .eq("id", leadId);
-  if (error) throw new Error(error.message);
+  if (error) return { error: error.message };
 
   await logInteraction(leadId, "status_change", `Status set to ${statusLabel(status)}.`);
+
+  let revisitError: string | undefined;
+  if (revisit && (revisitOn || revisitNote)) {
+    const res = await writeRevisit(leadId, { revisit_on: revisitOn, revisit_note: revisitNote });
+    revisitError = res.error;
+    if (!res.error) {
+      await logInteraction(
+        leadId,
+        "note",
+        revisitOn
+          ? `Revisit date set to ${revisitOn}${revisitNote ? `: ${revisitNote}` : "."}`
+          : `Revisit note set: ${revisitNote}`,
+      );
+    }
+  }
 
   // Moving a lead past (or back before) the outreach stage ends any automated
   // follow-ups: a human has taken over.
@@ -43,34 +99,38 @@ export async function updateLeadStatus(
   }
   revalidatePath(`/admin/leads/${leadId}`);
   revalidatePath("/admin/leads");
-  revalidatePath("/admin/admin");
+  revalidatePath("/admin");
+  return revisitError ? { error: `Status saved, but the revisit date was not: ${revisitError}` } : {};
 }
 
 /**
- * Set or clear a Back burner lead's revisit date (YYYY-MM-DD, or null).
- * Logged in the activity feed like other lead changes.
+ * Set or clear a lead's revisit date (YYYY-MM-DD, or null) and note. Any
+ * status. Only surfaces the lead on the dashboard and in the leads list;
+ * nothing is ever sent when the date arrives. Logged in the activity feed.
  */
-export async function updateRevisitOn(
+export async function updateRevisit(
   leadId: string,
   revisitOn: string | null,
+  note: string | null,
 ): Promise<{ error?: string }> {
-  const value = revisitOn?.trim() || null;
-  if (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return { error: "Use a date like 2027-03-15." };
+  const value = validRevisitDate(revisitOn);
+  if (value === false) return { error: "Use a date like 2027-03-15." };
+  const trimmedNote = note?.trim() || null;
+  if (trimmedNote && !value) {
+    return { error: "Pick a revisit date to go with the note." };
   }
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("leads")
-    .update({ revisit_on: value })
-    .eq("id", leadId);
-  if (error) return { error: error.message };
+  const res = await writeRevisit(leadId, { revisit_on: value, revisit_note: trimmedNote });
+  if (res.error) return res;
 
   await logInteraction(
     leadId,
     "note",
-    value ? `Revisit date set to ${value}.` : "Revisit date cleared.",
+    value
+      ? `Revisit date set to ${value}${trimmedNote ? `: ${trimmedNote}` : "."}`
+      : "Revisit date cleared.",
   );
   revalidatePath(`/admin/leads/${leadId}`);
+  revalidatePath("/admin/leads");
   revalidatePath("/admin");
   return {};
 }

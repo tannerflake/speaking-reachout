@@ -265,6 +265,12 @@ async function processSequence(
     return "stopped";
   }
 
+  // Guard 2b: referred contacts are handled by hand, never nudged.
+  if (seq.contact?.referred_by_contact_id) {
+    await stop(admin, seq, "Referred contact; handled by hand.");
+    return "stopped";
+  }
+
   // Guard 3: a usable recipient that hasn't bounced.
   const email = seq.contact?.email ?? null;
   if (!looksLikeRealEmail(email)) {

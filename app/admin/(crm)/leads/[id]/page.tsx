@@ -10,12 +10,22 @@ import {
 } from "@/lib/data";
 import {
   ContactStatusBadge,
+  MergedBadge,
   OriginBadge,
   QueuedBadge,
+  ReferredBadge,
+  RevisitBadge,
   SourceBadge,
   StatusBadge,
   TypeBadge,
 } from "@/components/Badge";
+import { AddReferredContact } from "@/components/AddReferredContact";
+import { LeadAdvancedPanel } from "@/components/LeadAdvancedPanel";
+import {
+  effectiveOrigin,
+  firstSentChannel,
+  isAttributionHistory,
+} from "@/lib/attribution";
 import { StatusControl } from "@/components/StatusControl";
 import { RevisitDateControl } from "@/components/RevisitDateControl";
 import { OutreachManager, type GuardView } from "@/components/OutreachManager";
@@ -101,6 +111,25 @@ export default async function LeadDetailPage({
       ? { kind: "flagged", reason: blockedReason }
       : checked;
   const hasRecurringBooking = lead.bookings.some((b) => b.is_recurring);
+  const origin = effectiveOrigin(lead, firstSentChannel(lead.outreach));
+  const attributionHistory = interactions.filter((i) => isAttributionHistory(i.detail));
+  const contactName = (id: string | null | undefined) => {
+    const c = lead.contacts.find((x) => x.id === id);
+    return c ? c.name || c.email || "a contact" : "a contact";
+  };
+  // A merged duplicate points at the lead that now holds its history.
+  let mergedInto: { id: string; name: string } | null = null;
+  if (lead.merged_into_id) {
+    const { data } = await (await createClient())
+      .from("leads")
+      .select("id, name")
+      .eq("id", lead.merged_into_id)
+      .maybeSingle();
+    mergedInto = (data as { id: string; name: string } | null) ?? {
+      id: lead.merged_into_id,
+      name: "the target lead",
+    };
+  }
 
   // On-demand email lookup is available only when a paid provider is configured
   // and the lead has a domain to search. (Hunter is never called automatically.)
@@ -127,15 +156,32 @@ export default async function LeadDetailPage({
           <StatusBadge status={lead.status} />
           <SourceBadge source={lead.source} />
           <OriginBadge
-            via={
-              lead.outreach
-                .filter((o) => o.status === "sent" && o.sent_at)
-                .sort((a, b) =>
-                  (a.sent_at as string).localeCompare(b.sent_at as string),
-                )[0]?.sent_via ?? null
-            }
+            via={origin.via}
+            overridden={origin.overridden}
+            reason={origin.reason}
           />
+          {mergedInto && <MergedBadge />}
+          <RevisitBadge on={lead.revisit_on} note={lead.revisit_note} />
         </div>
+        {mergedInto && (
+          <p className="mt-2 rounded-md border border-zinc-300 bg-zinc-100 px-3 py-2 text-sm text-zinc-800">
+            <span className="font-semibold">Merged into </span>
+            <Link
+              href={`/admin/leads/${mergedInto.id}`}
+              className="font-semibold text-blue-600 hover:underline"
+            >
+              {mergedInto.name}
+            </Link>
+            . This duplicate is kept for the record; its contacts, outreach and
+            activity now live on that lead.
+          </p>
+        )}
+        {origin.overridden && (
+          <p className="mt-2 text-xs text-zinc-500">
+            Attribution overridden to {origin.via === "app" ? "Sent via app" : "Not via app"}
+            {origin.by ? ` by ${origin.by}` : ""}: {origin.reason}
+          </p>
+        )}
         {blockedReason && (
           <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
             <span className="font-semibold">Already in contact.</span>{" "}
@@ -251,8 +297,16 @@ export default async function LeadDetailPage({
                           <span className="text-zinc-500"> · {c.role}</span>
                         )}
                       </div>
-                      <ContactStatusBadge status={c.contact_status} />
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {c.referred_by_contact_id && (
+                          <ReferredBadge by={contactName(c.referred_by_contact_id)} />
+                        )}
+                        <ContactStatusBadge status={c.contact_status} />
+                      </div>
                     </div>
+                    {c.phone && (
+                      <div className="mt-1 text-zinc-600">{c.phone}</div>
+                    )}
                     {looksLikeRealEmail(c.email) ? (
                       <div className="mt-1 text-zinc-600">
                         <a
@@ -281,6 +335,26 @@ export default async function LeadDetailPage({
                 ))}
               </ul>
             )}
+            {!mergedInto && (
+              <details className="mt-3 rounded-md border border-zinc-200 bg-white p-3 text-sm">
+                <summary className="cursor-pointer font-medium text-zinc-700">
+                  Add referred contact
+                </summary>
+                <p className="mb-3 mt-2 text-xs text-zinc-500">
+                  Someone here pointed you to a colleague? Add that person to
+                  this lead so the organization keeps its attribution. Use this
+                  instead of creating a new lead.
+                </p>
+                <AddReferredContact
+                  leadId={lead.id}
+                  contacts={lead.contacts.map((c) => ({
+                    id: c.id,
+                    name: c.name,
+                    email: c.email,
+                  }))}
+                />
+              </details>
+            )}
           </section>
 
           {/* Outreach */}
@@ -299,14 +373,18 @@ export default async function LeadDetailPage({
         <div className="space-y-6">
           <section className="rounded-lg border border-zinc-200 bg-white p-4">
             <h2 className="mb-2 text-sm font-medium text-zinc-500">Status</h2>
-            <StatusControl leadId={lead.id} current={lead.status} />
-            {lead.status === "back_burner" && (
-              <RevisitDateControl
-                key={lead.revisit_on ?? ""}
-                leadId={lead.id}
-                current={lead.revisit_on ?? null}
-              />
-            )}
+            <StatusControl
+              leadId={lead.id}
+              current={lead.status}
+              currentRevisitOn={lead.revisit_on ?? null}
+              currentRevisitNote={lead.revisit_note ?? null}
+            />
+            <RevisitDateControl
+              key={`${lead.revisit_on ?? ""}|${lead.revisit_note ?? ""}`}
+              leadId={lead.id}
+              current={lead.revisit_on ?? null}
+              currentNote={lead.revisit_note ?? null}
+            />
           </section>
 
           {/* Automated follow-ups */}
@@ -323,6 +401,18 @@ export default async function LeadDetailPage({
               <h2 className="mb-2 text-sm font-medium text-zinc-500">
                 Bookings
               </h2>
+              <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                <span>Commission attribution:</span>
+                {origin.via ? (
+                  <OriginBadge
+                    via={origin.via}
+                    overridden={origin.overridden}
+                    reason={origin.reason}
+                  />
+                ) : (
+                  <span>nothing sent yet</span>
+                )}
+              </div>
               {lead.bookings.length > 0 && (
                 <ul className="mb-3 space-y-2">
                   {lead.bookings.map((b) => (
@@ -395,6 +485,27 @@ export default async function LeadDetailPage({
           </section>
         </div>
       </div>
+
+      {/* Advanced: merge, attribution override, attribution history. Collapsed
+          so none of it is triggered by accident. */}
+      <details className="rounded-lg border border-zinc-200 bg-white p-4">
+        <summary className="cursor-pointer text-sm font-medium text-zinc-600">
+          Advanced: merge, attribution
+        </summary>
+        <div className="mt-4">
+          <LeadAdvancedPanel
+            leadId={lead.id}
+            leadName={lead.name}
+            origin={origin}
+            merged={Boolean(mergedInto)}
+            history={attributionHistory.map((h) => ({
+              id: h.id,
+              detail: h.detail,
+              created_at: h.created_at,
+            }))}
+          />
+        </div>
+      </details>
     </div>
   );
 }

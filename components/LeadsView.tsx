@@ -16,7 +16,9 @@ import {
   DraftGapBadge,
   OriginBadge,
   QueuedBadge,
+  MergedBadge,
   NeedsVerificationBadge,
+  RevisitBadge,
   SourceBadge,
   StatusBadge,
   TypeBadge,
@@ -41,6 +43,11 @@ import type { LeadStatus } from "@/lib/types";
 import { formatDateTime, statusLabel } from "@/lib/utils";
 import { useInlineConfirm } from "@/components/InlineConfirm";
 import { MultiSelect } from "@/components/MultiSelect";
+import {
+  REVISIT_LOOKAHEAD_DAYS,
+  REVISIT_TERMINAL_STATUSES,
+  localDatePlus,
+} from "@/lib/attribution";
 
 function clock(iso: string): string {
   const d = new Date(iso);
@@ -62,6 +69,10 @@ const ORIGIN_FILTER_KEY = "leads:originFilter";
 // Last-activity date range, stored as "YYYY-MM-DD" strings (empty = open end).
 const DATE_FROM_KEY = "leads:dateFrom";
 const DATE_TO_KEY = "leads:dateTo";
+// "Due to revisit" toggle: revisit date within 14 days (or overdue).
+const DUE_REVISIT_KEY = "leads:dueRevisit";
+// Merged duplicates are hidden unless this is on.
+const SHOW_MERGED_KEY = "leads:showMerged";
 // Column sort, stored as { key, dir }.
 const SORT_KEY = "leads:sort";
 
@@ -107,7 +118,7 @@ function compareRows(a: LeadListRow, b: LeadListRow, key: SortKey): number {
     case "status":
       return LEAD_STATUSES.indexOf(a.status) - LEAD_STATUSES.indexOf(b.status);
     case "sentBy":
-      return (a.originatedVia ?? "").localeCompare(b.originatedVia ?? "");
+      return (a.origin.via ?? "").localeCompare(b.origin.via ?? "");
     case "contacts":
       return a.contactsCount - b.contactsCount;
     case "drafts":
@@ -184,6 +195,7 @@ const SOURCE_OPTIONS = [
 const ORIGIN_OPTIONS = [
   { value: "app", label: "Sent via app" },
   { value: "gmail", label: "Sent from Gmail" },
+  { value: "not_app", label: "Not via app (override)" },
   { value: "unsent", label: "Nothing sent yet" },
 ];
 
@@ -202,6 +214,8 @@ export function LeadsView({
   const [search, setSearch] = useState<string>("");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
+  const [dueRevisit, setDueRevisit] = useState(false);
+  const [showMerged, setShowMerged] = useState(false);
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
@@ -290,6 +304,8 @@ export function LeadsView({
     if (savedFrom) setDateFrom(savedFrom);
     const savedTo = localStorage.getItem(DATE_TO_KEY);
     if (savedTo) setDateTo(savedTo);
+    setDueRevisit(localStorage.getItem(DUE_REVISIT_KEY) === "1");
+    setShowMerged(localStorage.getItem(SHOW_MERGED_KEY) === "1");
     const savedSort = loadSort();
     if (savedSort) setSort(savedSort);
   }, [initialStatus]);
@@ -321,6 +337,16 @@ export function LeadsView({
     localStorage.setItem(ORIGIN_FILTER_KEY, JSON.stringify(value));
   }
 
+  function changeDueRevisit(on: boolean) {
+    setDueRevisit(on);
+    localStorage.setItem(DUE_REVISIT_KEY, on ? "1" : "0");
+  }
+
+  function changeShowMerged(on: boolean) {
+    setShowMerged(on);
+    localStorage.setItem(SHOW_MERGED_KEY, on ? "1" : "0");
+  }
+
   function changeDateRange(from: string, to: string) {
     setDateFrom(from);
     setDateTo(to);
@@ -334,7 +360,18 @@ export function LeadsView({
     // "from" day and the end of the "to" day so both ends are inclusive.
     const fromMs = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null;
     const toMs = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : null;
+    const revisitHorizon = localDatePlus(REVISIT_LOOKAHEAD_DAYS);
     const matching = rows.filter((r) => {
+      if (!showMerged && r.merged_into_id) return false;
+      if (
+        dueRevisit &&
+        (!r.revisit_on ||
+          r.revisit_on > revisitHorizon ||
+          r.merged_into_id ||
+          REVISIT_TERMINAL_STATUSES.includes(r.status))
+      ) {
+        return false;
+      }
       if (fromMs !== null || toMs !== null) {
         const t = new Date(r.lastActivity).getTime();
         if (Number.isNaN(t)) return false;
@@ -356,7 +393,7 @@ export function LeadsView({
       if (
         origin.length > 0 &&
         !origin.some((o) =>
-          o === "unsent" ? !r.originatedVia : r.originatedVia === o,
+          o === "unsent" ? !r.origin.via : r.origin.via === o,
         )
       ) {
         return false;
@@ -371,7 +408,7 @@ export function LeadsView({
         sign * compareRows(a, b, sort.key) ||
         compareRows(b, a, "lastActivity"),
     );
-  }, [rows, status, source, origin, search, dateFrom, dateTo, sort]);
+  }, [rows, status, source, origin, search, dateFrom, dateTo, sort, dueRevisit, showMerged]);
 
   /**
    * Checkbox click. Plain click toggles one row; shift-click selects (or
@@ -832,6 +869,27 @@ export function LeadsView({
             </button>
           )}
         </div>
+        <button
+          type="button"
+          aria-pressed={dueRevisit}
+          onClick={() => changeDueRevisit(!dueRevisit)}
+          title="Revisit date within the next 14 days or overdue; closed, junk and merged leads excluded"
+          className={`rounded-md border px-2 py-1.5 text-sm ${
+            dueRevisit
+              ? "border-sky-500 bg-sky-50 text-sky-700"
+              : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50"
+          }`}
+        >
+          Due to revisit
+        </button>
+        <label className="flex items-center gap-1 text-xs text-zinc-500">
+          <input
+            type="checkbox"
+            checked={showMerged}
+            onChange={(e) => changeShowMerged(e.target.checked)}
+          />
+          Show merged leads
+        </label>
       </div>
 
       {/* Send queue status */}
@@ -1004,6 +1062,15 @@ export function LeadsView({
                       <QueuedBadge count={r.queuedCount} nextAt={r.nextScheduledAt} />
                       <NeedsVerificationBadge count={r.needsVerificationCount} />
                       <SourceBadge source={r.source} />
+                      <RevisitBadge
+                        on={
+                          r.merged_into_id || REVISIT_TERMINAL_STATUSES.includes(r.status)
+                            ? null
+                            : r.revisit_on
+                        }
+                        note={r.revisit_note}
+                      />
+                      {r.merged_into_id && <MergedBadge />}
                     </div>
                   </td>
                   <td>
@@ -1017,8 +1084,12 @@ export function LeadsView({
                     />
                   </td>
                   <td>
-                    {r.originatedVia ? (
-                      <OriginBadge via={r.originatedVia} />
+                    {r.origin.via ? (
+                      <OriginBadge
+                        via={r.origin.via}
+                        overridden={r.origin.overridden}
+                        reason={r.origin.reason}
+                      />
                     ) : (
                       <span className="text-zinc-400">—</span>
                     )}

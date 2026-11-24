@@ -279,7 +279,8 @@ export async function sendOutreachRow(
     // Every initial outreach gets an automated follow-up sequence (up to 3
     // nudges in the same thread; see lib/followups/cadence.ts). Follow-ups
     // themselves (sequence_step > 0) never start a new sequence.
-    if ((row.sequence_step ?? 0) === 0) {
+    // Referred contacts are handled by hand: no automated nudges.
+    if ((row.sequence_step ?? 0) === 0 && !row.contact?.referred_by_contact_id) {
       const firstAt = await startSequence(
         createAdminClient(),
         { id: row.id, lead_id: row.lead_id, contact_id: row.contact_id, sent_at: sentAt },
@@ -394,10 +395,22 @@ export async function queueOutreach(
   }));
   const result: QueueResult = { ...EMPTY_QUEUE };
 
+  // 0. Bulk runs (by lead) never schedule a referred contact: someone at the
+  // org pointed us to them and Jeff/Cheryl write to them by hand. A draft
+  // picked explicitly (by id) still goes through the engagement guard.
+  const candidates = rows.filter((r) => {
+    const referred =
+      outreachIds.length === 0 &&
+      !r.guard_override_at &&
+      !!(r.contact as { referred_by_contact_id?: string | null } | null)?.referred_by_contact_id;
+    if (referred) result.blocked += 1;
+    return !referred;
+  });
+
   // 1. Deliverability: verified addresses only.
   const verifiedNow = new Map<string, Contact["contact_status"]>();
   const deliverable: typeof rows = [];
-  for (const r of rows) {
+  for (const r of candidates) {
     let hold = sendHoldReason(r.contact);
     if (hold === "needs_verification" && r.contact) {
       let status = verifiedNow.get(r.contact.id);

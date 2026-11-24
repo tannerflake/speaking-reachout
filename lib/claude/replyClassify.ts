@@ -25,6 +25,11 @@ export interface ClassifiedReply {
    * back up, when the reply gives a timeframe. Null otherwise.
    */
   revisitOn: string | null;
+  /**
+   * With revisitOn: a short reason for the date, e.g. "Said booked for 2027;
+   * reach out spring 2027 for 2028". Null otherwise.
+   */
+  revisitReason: string | null;
 }
 
 const SYSTEM = `You classify a single email reply received in response to a cold speaking-engagement outreach sent on behalf of speaker Jeff Flake (former U.S. Senator). Decide the sender's intent and write a one-line note.
@@ -52,8 +57,10 @@ Examples of "back_burner":
 
 Revisit date: for "back_burner" only, if the reply names or implies a timeframe, give a best-guess date (YYYY-MM-DD) when Jeff's team should follow up, using today's date (given in the message) to resolve relative phrases. Pick a date shortly BEFORE the timeframe so there is time to plan: "next fall" -> August 15 of the coming fall; "the spring" -> February 15 of the coming spring; "after budget season in March" -> April 1; "next year" -> January 15 of next year; "in a few months" -> about 3 months from today. Always return a future date. If no timeframe is given, or the classification is not back_burner, use null.
 
+Revisit reason: whenever revisit_on is a date, also give "revisit_reason": a short plain-English reason for that date (max ~100 characters), e.g. "Said booked for 2027; reach out spring 2027 for 2028". Otherwise null.
+
 Return ONLY a JSON object (no prose, no markdown fences):
-{ "classification": "interested" | "back_burner" | "not_interested" | "cant_pay" | "auto_reply" | "unrelated", "note": string, "revisit_on": string | null }
+{ "classification": "interested" | "back_burner" | "not_interested" | "cant_pay" | "auto_reply" | "unrelated", "note": string, "revisit_on": string | null, "revisit_reason": string | null }
 
 The note must be a concise summary (max ~140 characters) of what the reply actually says.`;
 
@@ -113,6 +120,7 @@ ${body || "(empty)"}`;
       classification?: unknown;
       note?: unknown;
       revisit_on?: unknown;
+      revisit_reason?: unknown;
     }>(
       extractText(message),
     );
@@ -130,7 +138,12 @@ ${body || "(empty)"}`;
         : "(reply received)";
     const revisitOn =
       classification === "back_burner" ? validRevisitDate(parsed.revisit_on, today) : null;
-    return { classification, note, revisitOn };
+    const revisitReason = revisitOn
+      ? typeof parsed.revisit_reason === "string" && parsed.revisit_reason.trim()
+        ? parsed.revisit_reason.trim().slice(0, 200)
+        : note
+      : null;
+    return { classification, note, revisitOn, revisitReason };
   } catch (e) {
     void recordUsage({
       feature: "classify",
@@ -145,6 +158,7 @@ ${body || "(empty)"}`;
       classification: "interested",
       note: snippet ? `Reply: ${snippet}` : "Reply received.",
       revisitOn: null,
+      revisitReason: null,
     };
   }
 }

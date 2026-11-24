@@ -50,6 +50,12 @@ export async function enrichLeadCore(
     missingDrafts: 0,
   };
 
+  // A duplicate merged into another lead is done: no paid lookups for it.
+  const { data: leadRow } = await db.from("leads").select("*").eq("id", leadId).maybeSingle();
+  if ((leadRow as { merged_into_id?: string | null } | null)?.merged_into_id) {
+    return { ...out, blocked: true, error: "Merged into another lead." };
+  }
+
   const found = await findContactsForLead(db, leadId);
   out.contactsAdded = found.added;
   out.contactsWithEmail = found.withEmail;

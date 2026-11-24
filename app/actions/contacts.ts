@@ -9,6 +9,7 @@ import {
   type MultiFindResult,
 } from "@/lib/contacts/findForLead";
 import { looksLikeRealEmail } from "@/lib/utils";
+import { getCurrentUser } from "@/lib/auth/profile";
 import type { Contact } from "@/lib/types";
 
 type ContactWithLead = Contact & {
@@ -408,6 +409,116 @@ export async function markContactVerified(contactId: string): Promise<{ error?: 
     detail: `${row.email} marked verified by hand.`,
   });
   revalidatePath(`/admin/leads/${row.lead_id}`);
+  revalidatePath("/admin/leads");
+  return {};
+}
+
+export interface ReferredContactInput {
+  name: string;
+  email: string;
+  role: string | null;
+  phone: string | null;
+  /** The existing contact on this lead who pointed us to this person. */
+  referredById: string;
+  note: string | null;
+  /** Save even though the email is already a contact on another lead. */
+  allowDuplicate?: boolean;
+}
+
+export interface ReferredContactResult {
+  error?: string;
+  /** The email is already a contact on another lead (suggest Merge). */
+  duplicate?: { leadId: string; leadName: string; contactName: string | null };
+}
+
+/** Escape LIKE wildcards so an email is matched literally (case-insensitive). */
+function likeLiteral(value: string): string {
+  return value.replace(/[\\%_]/g, (m) => `\\${m}`);
+}
+
+/**
+ * "Add referred contact": someone at the org said "talk to X instead". X is
+ * saved on THIS lead with referred_by_contact_id, so the lead keeps its
+ * attribution (its first sent outreach). Referred contacts are never
+ * cold-drafted, bulk-scheduled or followed up automatically; Jeff/Cheryl
+ * write to them by hand, and the engagement guard counts the org as in
+ * conversation. Requires migration 0034.
+ */
+export async function addReferredContact(
+  leadId: string,
+  input: ReferredContactInput,
+): Promise<ReferredContactResult> {
+  const name = input.name.trim();
+  const email = input.email.trim();
+  if (!name) return { error: "Name is required." };
+  if (!looksLikeRealEmail(email)) return { error: "Enter a valid email address." };
+  if (!input.referredById) return { error: "Choose who referred this person." };
+
+  const supabase = await createClient();
+  const { data: referrer } = await supabase
+    .from("contacts")
+    .select("id, lead_id, name, email")
+    .eq("id", input.referredById)
+    .maybeSingle();
+  const ref = referrer as { id: string; lead_id: string; name: string | null; email: string | null } | null;
+  if (!ref || ref.lead_id !== leadId) {
+    return { error: "The referring contact must be one of this lead's contacts." };
+  }
+
+  const { data: existing } = await supabase
+    .from("contacts")
+    .select("id, lead_id, name, lead:leads(name)")
+    .ilike("email", likeLiteral(email));
+  type Existing = {
+    id: string;
+    lead_id: string;
+    name: string | null;
+    lead: { name: string } | { name: string }[] | null;
+  };
+  const rows = (existing as Existing[] | null) ?? [];
+  if (rows.some((r) => r.lead_id === leadId)) {
+    return { error: `${email} is already a contact on this lead.` };
+  }
+  const elsewhere = rows[0];
+  if (elsewhere && !input.allowDuplicate) {
+    const lead = Array.isArray(elsewhere.lead) ? elsewhere.lead[0] : elsewhere.lead;
+    return {
+      duplicate: {
+        leadId: elsewhere.lead_id,
+        leadName: lead?.name ?? "another lead",
+        contactName: elsewhere.name,
+      },
+    };
+  }
+
+  const { error } = await supabase.from("contacts").insert({
+    lead_id: leadId,
+    name,
+    email,
+    role: input.role?.trim() || null,
+    phone: input.phone?.trim() || null,
+    // Given to us by someone at the organization: an operator-entered address.
+    contact_status: "verified",
+    referred_by_contact_id: ref.id,
+  });
+  if (error) {
+    return {
+      error: /referred_by_contact_id|phone/.test(error.message)
+        ? "Referred contacts need database migration 0034 to be applied first."
+        : error.message,
+    };
+  }
+
+  const me = await getCurrentUser();
+  const note = input.note?.trim();
+  await supabase.from("interactions").insert({
+    lead_id: leadId,
+    kind: "note",
+    detail: `Referred contact ${name} <${email}> added (referred by ${ref.name || ref.email || "a contact"}) by ${
+      me?.email ?? "unknown user"
+    }.${note ? ` Note: ${note}` : ""} Handled by hand: no automated outreach or follow-ups to them.`,
+  });
+  revalidatePath(`/admin/leads/${leadId}`);
   revalidatePath("/admin/leads");
   return {};
 }

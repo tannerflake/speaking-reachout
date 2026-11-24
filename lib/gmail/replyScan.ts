@@ -54,6 +54,23 @@ type Match =
   | { kind: "thread" | "contact"; outreachId: string; leads: TrackedLead[] }
   | { kind: "domain"; outreachId: null; leads: TrackedLead[] };
 
+/**
+ * Update a lead's revisit fields. revisit_note arrives with migration 0034;
+ * until it is applied the update is retried without it.
+ */
+async function updateRevisitFields(
+  admin: Admin,
+  leadId: string,
+  patch: { status?: LeadStatus; revisit_on: string | null; revisit_note: string | null },
+): Promise<void> {
+  const { error } = await admin.from("leads").update(patch).eq("id", leadId);
+  if (error && /revisit_note/.test(error.message)) {
+    const { revisit_note: _omit, ...rest } = patch;
+    void _omit;
+    await admin.from("leads").update(rest).eq("id", leadId);
+  }
+}
+
 function senderAddress(from: string): string {
   const m = from.match(/<([^>]+)>/);
   return (m ? m[1] : from).trim().toLowerCase();
@@ -215,11 +232,12 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
       let classification: ReplyClassification;
       let summary: string;
       let revisitOn: string | null = null;
+      let revisitReason: string | null = null;
       if (isAutomatedMessage(m.from, m.subject)) {
         classification = "auto_reply";
         summary = m.subject || "Automatic reply.";
       } else {
-        ({ classification, note: summary, revisitOn } = await classifyReply({
+        ({ classification, note: summary, revisitOn, revisitReason } = await classifyReply({
           leadName: hit.leads.map((l) => l.name).join(" / "),
           from: m.from,
           subject: m.subject,
@@ -280,14 +298,15 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
         // decline. The later reply is still in the activity log.
         const downgrade = rank(target) < rank(l.status);
         if (target !== l.status && !PROTECTED.includes(l.status) && !downgrade) {
-          await admin
-            .from("leads")
-            .update(
-              target === "back_burner"
-                ? { status: target, revisit_on: revisitOn }
-                : { status: target },
-            )
-            .eq("id", l.id);
+          if (target === "back_burner") {
+            await updateRevisitFields(admin, l.id, {
+              status: target,
+              revisit_on: revisitOn,
+              revisit_note: revisitOn ? revisitReason : null,
+            });
+          } else {
+            await admin.from("leads").update({ status: target }).eq("id", l.id);
+          }
           await admin.from("interactions").insert({
             lead_id: l.id,
             kind: "status_change",
@@ -299,8 +318,14 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
           updatedLeads.add(l.id);
         } else if (target === "back_burner" && l.status === "back_burner" && revisitOn) {
           // A newer deferral with a timeframe moves the revisit date.
-          await admin.from("leads").update({ revisit_on: revisitOn }).eq("id", l.id);
-          await note(l.id, `Revisit date set to ${revisitOn} (auto: reply from ${fromName}).`);
+          await updateRevisitFields(admin, l.id, {
+            revisit_on: revisitOn,
+            revisit_note: revisitReason,
+          });
+          await note(
+            l.id,
+            `Revisit date set to ${revisitOn}${revisitReason ? ` (${revisitReason})` : ""} (auto: reply from ${fromName}).`,
+          );
           updatedLeads.add(l.id);
         }
         revalidatePath(`/admin/leads/${l.id}`);
