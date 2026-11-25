@@ -5,10 +5,13 @@ import { ReplyThreads } from "@/components/ReplyThreads";
 import {
   alreadyInContactReasons,
   getLead,
+  getLeadMessages,
   getLeadFollowups,
   getLeadInteractions,
 } from "@/lib/data";
 import {
+  BookedYearChips,
+  InboxChip,
   ContactStatusBadge,
   MergedBadge,
   OriginBadge,
@@ -38,7 +41,9 @@ import {
   markLeadAlreadyInContact,
   summarizeConflicts,
 } from "@/lib/outreach/guard";
-import { BookingForm } from "@/components/BookingForm";
+import { EngagementsPanel } from "@/components/EngagementsPanel";
+import { Correspondence, actorLabel } from "@/components/Correspondence";
+import { bookedYears } from "@/lib/engagements";
 import { ReachOutAgainButton } from "@/components/ReachOutAgainButton";
 import { AddNote } from "@/components/AddNote";
 import { FollowupsPanel } from "@/components/FollowupsPanel";
@@ -52,7 +57,7 @@ import {
 } from "@/lib/contacts/multiSource";
 import { getEnv } from "@/lib/env";
 import { NON_BOOKING_NOTE, inquiryLeadIds } from "@/lib/leads/kind";
-import { formatDate, formatDateTime, looksLikeRealEmail } from "@/lib/utils";
+import { formatDateTime, looksLikeRealEmail } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 // Drafting/sending outreach runs web-search generations — give it headroom.
@@ -102,10 +107,11 @@ export default async function LeadDetailPage({
     : await loadGuard(id);
   const lead = await getLead(id);
   if (!lead) notFound();
-  const [interactions, followups, blockedReasons] = await Promise.all([
+  const [interactions, followups, blockedReasons, messages] = await Promise.all([
     getLeadInteractions(id),
     getLeadFollowups(id),
     alreadyInContactReasons(await createClient(), [id]),
+    getLeadMessages(id),
   ]);
   const blockedReason =
     lead.status === "blocked"
@@ -164,6 +170,7 @@ export default async function LeadDetailPage({
           <InquiryBadge lead={lead} />
           <TypeBadge type={lead.type} />
           <StatusBadge status={lead.status} />
+          <BookedYearChips years={bookedYears(lead.bookings)} />
           <SourceBadge source={lead.source} />
           <OriginBadge
             via={origin.via}
@@ -393,6 +400,16 @@ export default async function LeadDetailPage({
               />
             )}
           </section>
+
+          {/* Imported correspondence (bot API, any inbox) */}
+          {messages.length > 0 && (
+            <section>
+              <h2 className="mb-2 text-sm font-medium text-zinc-500">
+                Correspondence ({messages.length}, oldest first, Arizona time)
+              </h2>
+              <Correspondence messages={messages} />
+            </section>
+          )}
         </div>
 
         {/* Sidebar */}
@@ -423,12 +440,10 @@ export default async function LeadDetailPage({
             </section>
           )}
 
-          {/* Bookings */}
-          {(lead.status === "booked" || lead.bookings.length > 0) && (
-            <section className="rounded-lg border border-zinc-200 bg-white p-4">
-              <h2 className="mb-2 text-sm font-medium text-zinc-500">
-                Bookings
-              </h2>
+          {/* Engagements (bookings): the per-year history */}
+          <section className="rounded-lg border border-zinc-200 bg-white p-4">
+            <h2 className="mb-2 text-sm font-medium text-zinc-500">Engagements</h2>
+            {(lead.status === "booked" || lead.bookings.length > 0) && (
               <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
                 <span>Commission attribution:</span>
                 {origin.via ? (
@@ -441,54 +456,18 @@ export default async function LeadDetailPage({
                   <span>nothing sent yet</span>
                 )}
               </div>
-              {lead.bookings.length > 0 && (
-                <ul className="mb-3 space-y-2">
-                  {lead.bookings.map((b) => (
-                    <li
-                      key={b.id}
-                      className="rounded-md border border-zinc-200 p-2 text-sm"
-                    >
-                      <div className="font-medium text-zinc-800">
-                        {b.event_name}
-                        {b.is_recurring && (
-                          <span className="ml-2 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
-                            recurring
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs text-zinc-500">
-                        {formatDate(b.event_date)}
-                        {b.topic ? ` · ${b.topic}` : ""}
-                        {b.fee != null ? ` · $${b.fee}` : ""}
-                      </div>
-                      {b.notes && (
-                        <div className="mt-1 text-xs text-zinc-500">
-                          {b.notes}
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              {hasRecurringBooking && (
-                <div className="mb-3">
-                  <ReachOutAgainButton leadId={lead.id} />
-                </div>
-              )}
-
-              {lead.status === "booked" && (
-                <details className="text-sm">
-                  <summary className="cursor-pointer text-zinc-600">
-                    Add a booking
-                  </summary>
-                  <div className="mt-3">
-                    <BookingForm leadId={lead.id} />
-                  </div>
-                </details>
-              )}
-            </section>
-          )}
+            )}
+            <EngagementsPanel
+              leadId={lead.id}
+              bookings={lead.bookings}
+              leadIsBooked={lead.status === "booked"}
+            />
+            {hasRecurringBooking && (
+              <div className="mt-3">
+                <ReachOutAgainButton leadId={lead.id} />
+              </div>
+            )}
+          </section>
 
           {/* Activity */}
           <section className="rounded-lg border border-zinc-200 bg-white p-4">
@@ -506,6 +485,16 @@ export default async function LeadDetailPage({
                     <span className="ml-1 text-xs text-zinc-400">
                       {formatDateTime(i.created_at)}
                     </span>
+                    {actorLabel(i.actor) && (
+                      <span className="ml-1 text-xs font-medium text-zinc-500">
+                        · {actorLabel(i.actor)}
+                      </span>
+                    )}
+                    {i.source_inbox && (
+                      <span className="ml-1 inline-block align-middle">
+                        <InboxChip inbox={i.source_inbox} />
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>

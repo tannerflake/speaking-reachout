@@ -196,6 +196,13 @@ export function InquiryBadge({
 }
 
 export function SourceBadge({ source }: { source: LeadSource }) {
+  if (source === "bot_import") {
+    return (
+      <Pill className="border-zinc-200 bg-zinc-50 text-zinc-600" title="Added by Jeff's bot through the import API">
+        Imported by bot
+      </Pill>
+    );
+  }
   if (source !== "website_inbound") return null;
   return (
     <Pill className="border-sky-200 bg-sky-50 text-sky-700">
@@ -351,4 +358,56 @@ export function TypeBadge({ type }: { type: string }) {
   return (
     <Pill className="border-zinc-200 bg-zinc-50 text-zinc-600">{type}</Pill>
   );
+}
+
+/**
+ * "Booked 2025" chips: one per year with a non-canceled engagement
+ * (migration 0037). Years where everything is still upcoming get a dashed,
+ * lighter style and an "upcoming" tooltip.
+ */
+export function BookedYearChips({
+  years,
+}: {
+  years: Array<{ year: number; upcoming: boolean }> | null | undefined;
+}) {
+  if (!years || years.length === 0) return null;
+  return (
+    <>
+      {years.map((y) => (
+        <Pill
+          key={y.year}
+          className={
+            y.upcoming
+              ? "border-dashed border-emerald-300 bg-white text-emerald-700"
+              : "border-emerald-200 bg-emerald-50 text-emerald-800"
+          }
+          title={y.upcoming ? `Upcoming engagement in ${y.year}` : `Spoke here in ${y.year}`}
+        >
+          Booked {y.year}
+          {y.upcoming && <span className="ml-1 text-[10px] font-normal text-emerald-600">upcoming</span>}
+        </Pill>
+      ))}
+    </>
+  );
+}
+
+const OUTCOME_CLASSES: Record<string, string> = {
+  completed: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  upcoming: "border-sky-200 bg-sky-50 text-sky-700",
+  canceled: "border-rose-200 bg-rose-50 text-rose-700",
+};
+
+export function OutcomeBadge({ outcome }: { outcome: string | null | undefined }) {
+  if (!outcome) return null;
+  return (
+    <Pill className={OUTCOME_CLASSES[outcome] ?? "border-zinc-200 bg-zinc-50 text-zinc-600"}>
+      {outcome.charAt(0).toUpperCase() + outcome.slice(1)}
+    </Pill>
+  );
+}
+
+/** Small grey chip naming the inbox a bot-imported entry came from. */
+export function InboxChip({ inbox }: { inbox: string | null | undefined }) {
+  if (!inbox) return null;
+  return <Pill className="border-zinc-200 bg-zinc-50 font-normal text-zinc-500">{inbox}</Pill>;
 }

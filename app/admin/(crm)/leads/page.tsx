@@ -12,9 +12,11 @@ export const maxDuration = 300;
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; kind?: string }>;
+  searchParams: Promise<{ status?: string; kind?: string; booked?: string }>;
 }) {
-  const { status, kind } = await searchParams;
+  const { status, kind, booked } = await searchParams;
+  // "Booked year" filter: a 4-digit year or "past" (any past client).
+  const bookedFilter = booked === "past" || /^\d{4}$/.test(booked ?? "") ? (booked as string) : "";
   // Inquiries (press, interview/student, other) are hidden by default.
   const showInquiries = kind === "inquiry";
   const validFilters: string[] = [...LEAD_STATUSES, "drafted"];
@@ -52,7 +54,7 @@ export default async function LeadsPage({
         </div>
         <ScanEmailButton variant="secondary" />
       </div>
-      <LeadsView rows={rows} initialStatus={initialStatus} />
+      <LeadsView rows={rows} initialStatus={initialStatus} bookedFilter={bookedFilter} />
     </div>
   );
 }

@@ -8,7 +8,8 @@ import { pickPrimaryContact, statusLabel } from "@/lib/utils";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { stopSequencesForLead } from "@/lib/followups/stop";
 import { FOLLOWUP_ELIGIBLE_STATUSES } from "@/lib/followups/cadence";
-import type { InquiryType, LeadKind, LeadStatus } from "@/lib/types";
+import type { BookingOutcome, InquiryType, LeadKind, LeadStatus } from "@/lib/types";
+import { BOOKING_OUTCOMES } from "@/lib/types";
 import {
   INQUIRY_BADGE,
   INQUIRY_REFUSAL,
@@ -177,38 +178,127 @@ export interface BookingInput {
   fee: number | null;
   is_recurring: boolean;
   notes: string | null;
+  /** Required when event_date is empty (migration 0037). */
+  event_year?: number | null;
+  event_end_date?: string | null;
+  location?: string | null;
+  /** null = let the DB trigger derive it from the date/year. */
+  outcome?: BookingOutcome | null;
+  /** Also set the lead's status to Booked (default true, the old behavior). */
+  markBooked?: boolean;
 }
 
+function validateBooking(input: BookingInput): { error?: string; row?: Record<string, unknown> } {
+  const name = input.event_name?.trim();
+  if (!name) return { error: "Event name is required." };
+  const date = input.event_date?.trim() || null;
+  const end = input.event_end_date?.trim() || null;
+  const isDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+  if (date && !isDate(date)) return { error: "Use a date like 2027-03-15." };
+  if (end && !isDate(end)) return { error: "Use an end date like 2027-03-16." };
+  let year = input.event_year ?? null;
+  if (year != null && (!Number.isInteger(year) || year < 1990 || year > 2100)) {
+    return { error: "Year must be a year like 2025." };
+  }
+  if (date) year = Number(date.slice(0, 4));
+  if (!date && year == null) return { error: "Give an event date, or at least the year." };
+  if (input.outcome && !BOOKING_OUTCOMES.includes(input.outcome)) return { error: "Unknown outcome." };
+  if (input.fee != null && (!Number.isFinite(input.fee) || input.fee < 0)) return { error: "Fee must be a positive number." };
+  return {
+    row: {
+      event_name: name,
+      event_date: date,
+      event_end_date: end,
+      event_year: year,
+      topic: input.topic?.trim() || null,
+      fee: input.fee,
+      is_recurring: input.is_recurring,
+      notes: input.notes?.trim() || null,
+      location: input.location?.trim() || null,
+      // null lets the trigger set upcoming/completed from the date or year.
+      outcome: input.outcome ?? null,
+    },
+  };
+}
+
+function revalidateLead(leadId: string) {
+  revalidatePath(`/admin/leads/${leadId}`);
+  revalidatePath("/admin/leads");
+  revalidatePath("/admin");
+}
+
+/** Add an engagement (booking). By default also marks the lead Booked. */
 export async function saveBooking(
   leadId: string,
   input: BookingInput,
 ): Promise<{ error?: string }> {
   const supabase = await createClient();
-  if (!input.event_name.trim()) return { error: "Event name is required." };
+  const v = validateBooking(input);
+  if (v.error || !v.row) return { error: v.error };
 
-  const { error } = await supabase.from("bookings").insert({
-    lead_id: leadId,
-    event_name: input.event_name.trim(),
-    event_date: input.event_date || null,
-    topic: input.topic || null,
-    fee: input.fee,
-    is_recurring: input.is_recurring,
-    notes: input.notes || null,
-  });
+  const { data, error } = await supabase
+    .from("bookings")
+    .insert({ lead_id: leadId, ...v.row, source: "manual" })
+    .select("outcome")
+    .single();
   if (error) return { error: error.message };
+  const outcome = (data as { outcome: BookingOutcome | null } | null)?.outcome ?? null;
 
-  // Ensure the lead is marked booked (and end any automated follow-ups).
-  await supabase.from("leads").update({ status: "booked" }).eq("id", leadId);
-  await stopSequencesForLead(createAdminClient(), leadId, "Booked.");
+  const when = (v.row.event_date as string | null) ?? String(v.row.event_year);
+  if (input.markBooked !== false && outcome !== "canceled") {
+    // Ensure the lead is marked booked (and end any automated follow-ups).
+    await supabase.from("leads").update({ status: "booked" }).eq("id", leadId);
+    await stopSequencesForLead(createAdminClient(), leadId, "Booked.");
+    await logInteraction(leadId, "status_change", `Booked: ${v.row.event_name} (${when}).`);
+  } else {
+    await logInteraction(
+      leadId,
+      "note",
+      `Engagement added: ${v.row.event_name} (${when}${outcome ? `, ${outcome}` : ""}).`,
+    );
+  }
+  revalidateLead(leadId);
+  return {};
+}
+
+/** Edit an engagement. */
+export async function updateBooking(
+  bookingId: string,
+  input: BookingInput,
+): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const v = validateBooking(input);
+  if (v.error || !v.row) return { error: v.error };
+  const { data, error } = await supabase
+    .from("bookings")
+    .update(v.row)
+    .eq("id", bookingId)
+    .select("lead_id")
+    .single();
+  if (error) return { error: error.message };
+  const leadId = (data as { lead_id: string }).lead_id;
+  await logInteraction(leadId, "note", `Engagement updated: ${v.row.event_name}.`);
+  revalidateLead(leadId);
+  return {};
+}
+
+/** Delete an engagement. Lead status is left alone. */
+export async function deleteBooking(bookingId: string): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("bookings")
+    .delete()
+    .eq("id", bookingId)
+    .select("lead_id, event_name, event_year")
+    .single();
+  if (error) return { error: error.message };
+  const row = data as { lead_id: string; event_name: string; event_year: number | null };
   await logInteraction(
-    leadId,
-    "status_change",
-    `Booked: ${input.event_name.trim()}${input.event_date ? ` (${input.event_date})` : ""}.`,
+    row.lead_id,
+    "note",
+    `Engagement deleted: ${row.event_name}${row.event_year ? ` (${row.event_year})` : ""}.`,
   );
-
-  revalidatePath(`/admin/leads/${leadId}`);
-  revalidatePath("/admin/leads");
-  revalidatePath("/admin/admin");
+  revalidateLead(row.lead_id);
   return {};
 }
 

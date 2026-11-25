@@ -27,6 +27,7 @@ import type {
   FollowupSequence,
   Interaction,
   Lead,
+  LeadMessage,
   LeadStatus,
   LeadType,
   LeadWithRelations,
@@ -38,6 +39,7 @@ import type {
 import { LEAD_STATUSES, PIPELINE_STATUSES } from "@/lib/types";
 import type { InquiryType, LeadKind } from "@/lib/types";
 import { leadKindAvailable, speakingOnly } from "@/lib/leads/kind";
+import { bookedYears, isPastClient, type BookedYear } from "@/lib/engagements";
 import {
   REVISIT_LOOKAHEAD_DAYS,
   REVISIT_TERMINAL_STATUSES,
@@ -100,6 +102,10 @@ export interface LeadListRow extends Lead {
   blockedReason: string | null;
   /** Every contact search came back without a usable email; stopped looking. */
   contactSearchExhausted: boolean;
+  /** Years with a non-canceled engagement (migration 0037), ascending. */
+  bookedYears: BookedYear[];
+  /** At least one completed engagement. */
+  pastClient: boolean;
 }
 
 export interface LeadFilters {
@@ -203,6 +209,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
   } catch {
     // Advisory only: the list still renders, and drafting/sending re-check.
   }
+  const engagementsByLead = await bookingYearsByLead(supabase);
   const listed = rows.map((row) => {
     const firstSent = (row.outreach ?? [])
       .filter((o) => o.status === "sent" && o.sent_at)
@@ -259,6 +266,8 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
         null,
       contactSearchExhausted:
         emailable.size === 0 && contacts.length >= MAX_CONTACT_ROWS_PER_LEAD,
+      bookedYears: bookedYears(engagementsByLead.get(row.id)),
+      pastClient: isPastClient(engagementsByLead.get(row.id)),
     };
   });
 
@@ -286,6 +295,43 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
     for (const r of unexplained) r.blockedReason = reasons.get(r.id) ?? null;
   }
   return listed;
+}
+
+/**
+ * Every booking's (lead_id, event_year, outcome) in one paged query, grouped
+ * by lead: the source of the "Booked 2025" chips and the Booked year filter.
+ * Empty (not an error) before migration 0037.
+ */
+export async function bookingYearsByLead(
+  db: Db,
+): Promise<Map<string, Array<Pick<Booking, "event_year" | "outcome">>>> {
+  const out = new Map<string, Array<Pick<Booking, "event_year" | "outcome">>>();
+  try {
+    const rows = await selectAll<{ lead_id: string; event_year: number | null; outcome: Booking["outcome"] }>(
+      () => db.from("bookings").select("id, lead_id, event_year, outcome"),
+    );
+    for (const r of rows) {
+      const list = out.get(r.lead_id) ?? [];
+      list.push({ event_year: r.event_year, outcome: r.outcome });
+      out.set(r.lead_id, list);
+    }
+  } catch {
+    // Columns missing (migration 0037 not applied): no chips.
+  }
+  return out;
+}
+
+/** A lead's imported correspondence (lead_messages), oldest first. */
+export async function getLeadMessages(leadId: string, limit = 500): Promise<LeadMessage[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("lead_messages")
+    .select("*")
+    .eq("lead_id", leadId)
+    .order("sent_at", { ascending: true })
+    .limit(limit);
+  if (error) return [];
+  return (data as LeadMessage[]) ?? [];
 }
 
 /**
@@ -348,8 +394,12 @@ export async function getLead(
     outreach: (lead.outreach ?? []).sort((a, b) =>
       b.created_at.localeCompare(a.created_at),
     ),
-    bookings: (lead.bookings ?? []).sort((a, b) =>
-      b.created_at.localeCompare(a.created_at),
+    // Engagement history: newest year first, undated last within a year.
+    bookings: (lead.bookings ?? []).sort(
+      (a, b) =>
+        (b.event_year ?? 0) - (a.event_year ?? 0) ||
+        (b.event_date ?? "").localeCompare(a.event_date ?? "") ||
+        b.created_at.localeCompare(a.created_at),
     ),
   };
 }

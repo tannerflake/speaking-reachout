@@ -9,9 +9,11 @@ import {
   useTransition,
 } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { matchesBookedFilter } from "@/lib/engagements";
 import {
   BlockedBadge,
+  BookedYearChips,
   ContactGapBadge,
   DraftGapBadge,
   OriginBadge,
@@ -192,6 +194,7 @@ function loadList(key: string): string[] | null {
 const SOURCE_OPTIONS = [
   { value: "website_inbound", label: "Via jeffflake.com" },
   { value: "outbound", label: "Outbound" },
+  { value: "bot_import", label: "Imported by bot" },
 ];
 
 const ORIGIN_OPTIONS = [
@@ -204,10 +207,28 @@ const ORIGIN_OPTIONS = [
 export function LeadsView({
   rows,
   initialStatus,
+  bookedFilter = "",
 }: {
   rows: LeadListRow[];
   initialStatus?: LeadStatus | "drafted";
+  /** "Booked year" filter from the ?booked= query param: a year, "past", or "". */
+  bookedFilter?: string;
 }) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  // Years present in any lead's engagement history, for the filter options.
+  const bookedYearOptions = useMemo(() => {
+    const ys = new Set<number>();
+    for (const r of rows) for (const y of r.bookedYears ?? []) ys.add(y.year);
+    return Array.from(ys).sort((a, b) => b - a);
+  }, [rows]);
+  function changeBooked(value: string) {
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
+    if (value) params.set("booked", value);
+    else params.delete("booked");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }
   const [status, setStatus] = useState<string[]>(
     initialStatus ? [initialStatus] : [],
   );
@@ -392,6 +413,9 @@ export function LeadsView({
         return false;
       }
       if (source.length > 0 && !source.includes(r.source)) return false;
+      if (!matchesBookedFilter(bookedFilter, r.bookedYears ?? [], r.pastClient ?? false)) {
+        return false;
+      }
       if (
         origin.length > 0 &&
         !origin.some((o) =>
@@ -410,7 +434,7 @@ export function LeadsView({
         sign * compareRows(a, b, sort.key) ||
         compareRows(b, a, "lastActivity"),
     );
-  }, [rows, status, source, origin, search, dateFrom, dateTo, sort, dueRevisit, showMerged]);
+  }, [rows, status, source, origin, search, dateFrom, dateTo, sort, dueRevisit, showMerged, bookedFilter]);
 
   /**
    * Checkbox click. Plain click toggles one row; shift-click selects (or
@@ -813,6 +837,25 @@ export function LeadsView({
           ariaLabel="Filter by source"
           className={selectClass}
         />
+        <select
+          value={bookedFilter}
+          onChange={(e) => changeBooked(e.target.value)}
+          aria-label="Filter by booked year"
+          className={selectClass}
+        >
+          <option value="">Booked year: any</option>
+          <option value="past">Any past client</option>
+          {bookedYearOptions.map((y) => (
+            <option key={y} value={String(y)}>
+              Booked {y}
+            </option>
+          ))}
+          {bookedFilter &&
+            bookedFilter !== "past" &&
+            !bookedYearOptions.includes(Number(bookedFilter)) && (
+              <option value={bookedFilter}>Booked {bookedFilter}</option>
+            )}
+        </select>
         <MultiSelect
           value={origin}
           onChange={changeOrigin}
@@ -1066,6 +1109,7 @@ export function LeadsView({
                       <LeadHolidayOooBadge until={r.holidayOooUntil} />
                       <SourceBadge source={r.source} />
                       <InquiryBadge lead={r} />
+                      <BookedYearChips years={r.bookedYears} />
                       <RevisitBadge
                         on={
                           r.merged_into_id || REVISIT_TERMINAL_STATUSES.includes(r.status)
