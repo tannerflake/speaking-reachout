@@ -53,9 +53,9 @@ export function effectiveOrigin(
 }
 
 export function originValueLabel(via: OriginValue | null): string {
-  if (via === "app") return "Sent via app";
-  if (via === "gmail") return "Sent from Gmail";
-  if (via === "not_app") return "Not via app";
+  if (via === "app") return "App (Tanner)";
+  if (via === "gmail") return "Gmail (Jeff)";
+  if (via === "not_app") return "Gmail (Jeff)";
   return "Nothing sent yet";
 }
 

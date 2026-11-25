@@ -73,7 +73,7 @@ All responses are JSON. Errors look like `{"error": "<code>", ...}`:
 * **Outbound messages** also create an outreach row (`status: sent`,
   `sent_via` from the message, default `gmail`) so the "already contacted"
   engagement guard and commission attribution see them. Bot-logged mail with
-  the default `sent_via: "gmail"` does **not** count as "Sent via app". These
+  the default `sent_via: "gmail"` does **not** count as "App (Tanner)" (the CRM's Sent by label). These
   rows are never queued and never get a follow-up sequence, so the send queue
   and follow-up runner never act on them.
 * **Inbound messages** set `replied_at` on the outreach they answer (same

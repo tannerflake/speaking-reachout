@@ -11,7 +11,7 @@
 //   follow-up runner never touches them either (both only act on 'queued'
 //   outreach and on followup_sequences). They exist so the engagement guard
 //   and attribution see the conversation. sent_via defaults to 'gmail', so
-//   bot-logged mail does NOT count as "Sent via app".
+//   bot-logged mail does NOT count as "App (Tanner)" (Sent by).
 // - Stopping follow-ups IS allowed (positive/terminal status change, or a
 //   human reply newer than an active sequence); creating them is not.
 // - Blocked leads are never unblocked by the bot. Status never changes
@@ -299,7 +299,7 @@ export async function updateLeadFields(ctx: ImportCtx, lead: Lead, l: LeadFields
         ctx,
         lead.id,
         "note",
-        `Attribution override set to ${l.attribution_override === "app" ? "Sent via app" : "Not via app"} by ${ctx.actor} (from ${ctx.sourceInbox}): ${reason ?? "no reason given"}`,
+        `Attribution override set to ${l.attribution_override === "app" ? "App (Tanner)" : "Gmail (Jeff)"} by ${ctx.actor} (from ${ctx.sourceInbox}): ${reason ?? "no reason given"}`,
       );
       next = { ...next, attribution_override: l.attribution_override, attribution_override_reason: reason };
     }

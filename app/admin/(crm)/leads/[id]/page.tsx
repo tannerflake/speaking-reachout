@@ -202,7 +202,7 @@ export default async function LeadDetailPage({
         )}
         {origin.overridden && (
           <p className="mt-2 text-xs text-zinc-500">
-            Attribution overridden to {origin.via === "app" ? "Sent via app" : "Not via app"}
+            Sent by overridden to {origin.via === "app" ? "App (Tanner)" : "Gmail (Jeff)"}
             {origin.by ? ` by ${origin.by}` : ""}: {origin.reason}
           </p>
         )}
@@ -445,7 +445,7 @@ export default async function LeadDetailPage({
             <h2 className="mb-2 text-sm font-medium text-zinc-500">Engagements</h2>
             {(lead.status === "booked" || lead.bookings.length > 0) && (
               <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                <span>Commission attribution:</span>
+                <span>Sent by:</span>
                 {origin.via ? (
                   <OriginBadge
                     via={origin.via}
@@ -507,7 +507,7 @@ export default async function LeadDetailPage({
           so none of it is triggered by accident. */}
       <details className="rounded-lg border border-zinc-200 bg-white p-4">
         <summary className="cursor-pointer text-sm font-medium text-zinc-600">
-          Advanced: lead kind, merge, attribution
+          Advanced: lead kind, merge, Sent by
         </summary>
         <div className="mt-4">
           <LeadAdvancedPanel

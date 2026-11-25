@@ -60,10 +60,10 @@ export function originLabel(via: OriginValue): string {
 }
 
 /**
- * Who started the conversation with this lead. "Sent via app" means the
- * operator sent the first outreach here (commissionable); "Sent from Gmail"
- * means it was sent by hand and imported; "Not via app" only comes from an
- * operator override. Renders nothing until something has been sent (or an
+ * "Sent by": who started the conversation with this lead. "App (Tanner)" means
+ * the operator sent the first outreach here (commissionable); "Gmail (Jeff)"
+ * means it was sent by hand and imported, or an operator override set it to
+ * not_app (also shown as "Gmail (Jeff)"). Renders nothing until something has been sent (or an
  * override is set). An override shows "(overridden)"; hover for the reason.
  */
 export function OriginBadge({
@@ -83,7 +83,7 @@ export function OriginBadge({
           ? "border-emerald-200 bg-emerald-50 text-emerald-700"
           : "border-amber-200 bg-amber-50 text-amber-800"
       }
-      title={overridden ? `Attribution overridden: ${reason ?? "no reason recorded"}` : undefined}
+      title={overridden ? `Sent by overridden: ${reason ?? "no reason recorded"}` : undefined}
     >
       {originLabel(via)}
       {overridden && <span className="ml-1 text-[10px] font-normal opacity-80">(overridden)</span>}

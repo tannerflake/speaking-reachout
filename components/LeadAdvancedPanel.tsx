@@ -172,7 +172,7 @@ function MergeSection({ leadId, leadName }: { leadId: string; leadName: string }
             )}
             <li>
               Outreach rows: {preview.outreach.total} ({preview.outreach.sent} sent,{" "}
-              {preview.outreach.appSent} sent via app)
+              {preview.outreach.appSent} sent by App (Tanner))
             </li>
             <li>Interactions / notes: {preview.interactions}</li>
             <li>
@@ -185,11 +185,11 @@ function MergeSection({ leadId, leadName }: { leadId: string; leadName: string }
           </ul>
           <div className="grid gap-1 text-xs">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="w-40 text-amber-900">This lead&apos;s attribution:</span>
+              <span className="w-40 text-amber-900">This lead&apos;s Sent by:</span>
               <OriginLine origin={preview.source.origin} />
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="w-40 text-amber-900">Target&apos;s attribution:</span>
+              <span className="w-40 text-amber-900">Target&apos;s Sent by:</span>
               <OriginLine origin={preview.target.origin} />
             </div>
             <div className="flex flex-wrap items-center gap-2 font-medium">
@@ -286,15 +286,15 @@ function AttributionSection({
   return (
     <section aria-labelledby="attribution-heading" className="space-y-3">
       <h3 id="attribution-heading" className="text-sm font-semibold text-zinc-800">
-        Edit attribution
+        Edit Sent by
       </h3>
       <div className="space-y-1 text-xs text-zinc-600">
         <div className="flex flex-wrap items-center gap-2">
-          <span>Current attribution:</span>
+          <span>Current Sent by:</span>
           <OriginLine origin={origin} />
         </div>
         <div>
-          First sent outreach channel: {originValueLabel(origin.computed)} (outreach
+          First outreach sent by: {originValueLabel(origin.computed)} (outreach
           rows are never changed here).
         </div>
         {origin.overridden && (
@@ -308,7 +308,7 @@ function AttributionSection({
       <div className="space-y-2 rounded-md border border-zinc-200 p-3">
         <div>
           <label htmlFor="attr-value" className={labelClass}>
-            New attribution
+            New Sent by
           </label>
           <select
             id="attr-value"
@@ -317,8 +317,8 @@ function AttributionSection({
             className={inputClass}
           >
             <option value="">Choose…</option>
-            <option value="app">Sent via app (commissionable)</option>
-            <option value="not_app">Not via app</option>
+            <option value="app">App (Tanner) (commissionable)</option>
+            <option value="not_app">Gmail (Jeff)</option>
           </select>
         </div>
         <div>
@@ -351,7 +351,7 @@ function AttributionSection({
           disabled={pending || !canSave}
           className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
         >
-          {pending ? "Saving…" : "Save attribution override"}
+          {pending ? "Saving…" : "Save Sent by override"}
         </button>
       </div>
 
@@ -559,11 +559,11 @@ export function LeadAdvancedPanel({
       {!merged && <AttributionSection leadId={leadId} origin={origin} />}
       <section aria-labelledby="attr-history-heading">
         <h3 id="attr-history-heading" className="mb-2 text-sm font-semibold text-zinc-800">
-          Attribution history
+          Sent by history
         </h3>
         {history.length === 0 ? (
           <p className="text-xs text-zinc-500">
-            No overrides, merges or referred contacts yet. Attribution follows the
+            No overrides, merges or referred contacts yet. Sent by follows the
             first sent outreach.
           </p>
         ) : (

@@ -198,9 +198,9 @@ const SOURCE_OPTIONS = [
 ];
 
 const ORIGIN_OPTIONS = [
-  { value: "app", label: "Sent via app" },
-  { value: "gmail", label: "Sent from Gmail" },
-  { value: "not_app", label: "Not via app (override)" },
+  { value: "app", label: "App (Tanner)" },
+  { value: "gmail", label: "Gmail (Jeff)" },
+  { value: "not_app", label: "Gmail (Jeff) (override)" },
   { value: "unsent", label: "Nothing sent yet" },
 ];
 
