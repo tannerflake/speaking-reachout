@@ -52,7 +52,7 @@ function validRevisitDate(value: string | null | undefined): string | null | fal
 }
 
 /**
- * Change a lead's status. Moving to Back burner can carry an optional
+ * Change a lead's status. Moving to Interested or Back burner can carry an optional
  * revisit date and note in the same step (both may be left blank).
  */
 export async function updateLeadStatus(

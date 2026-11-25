@@ -61,10 +61,10 @@ type Match =
 async function updateRevisitFields(
   admin: Admin,
   leadId: string,
-  patch: { status?: LeadStatus; revisit_on: string | null; revisit_note: string | null },
+  patch: { status?: LeadStatus; revisit_on: string | null; revisit_note?: string },
 ): Promise<void> {
   const { error } = await admin.from("leads").update(patch).eq("id", leadId);
-  if (error && /revisit_note/.test(error.message)) {
+  if (error && /revisit_note/.test(error.message) && "revisit_note" in patch) {
     const { revisit_note: _omit, ...rest } = patch;
     void _omit;
     await admin.from("leads").update(rest).eq("id", leadId);
@@ -298,11 +298,13 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
         // decline. The later reply is still in the activity log.
         const downgrade = rank(target) < rank(l.status);
         if (target !== l.status && !PROTECTED.includes(l.status) && !downgrade) {
-          if (target === "back_burner") {
+          if (target === "back_burner" && revisitOn) {
+            // Only touch revisit fields when the reply gave a date, and never
+            // blank out a manually written note with an empty reason.
             await updateRevisitFields(admin, l.id, {
               status: target,
               revisit_on: revisitOn,
-              revisit_note: revisitOn ? revisitReason : null,
+              ...(revisitReason ? { revisit_note: revisitReason } : {}),
             });
           } else {
             await admin.from("leads").update({ status: target }).eq("id", l.id);
@@ -320,7 +322,7 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
           // A newer deferral with a timeframe moves the revisit date.
           await updateRevisitFields(admin, l.id, {
             revisit_on: revisitOn,
-            revisit_note: revisitReason,
+            ...(revisitReason ? { revisit_note: revisitReason } : {}),
           });
           await note(
             l.id,
