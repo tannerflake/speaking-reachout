@@ -9,6 +9,7 @@ import { stopFollowupsForOrganization } from "@/lib/followups/stop";
 import { classifyBounce } from "@/lib/gmail/bounce";
 import { markAddressBounced } from "@/lib/contacts/deliverability";
 import { orgDomainOfEmail, statusLabel } from "@/lib/utils";
+import { localDatePlus } from "@/lib/attribution";
 import type { IngestedMessage, LeadStatus } from "@/lib/types";
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -61,7 +62,7 @@ type Match =
 async function updateRevisitFields(
   admin: Admin,
   leadId: string,
-  patch: { status?: LeadStatus; revisit_on: string | null; revisit_note?: string },
+  patch: { status?: LeadStatus; revisit_on: string | null; revisit_note?: string | null },
 ): Promise<void> {
   const { error } = await admin.from("leads").update(patch).eq("id", leadId);
   if (error && /revisit_note/.test(error.message) && "revisit_note" in patch) {
@@ -69,6 +70,59 @@ async function updateRevisitFields(
     void _omit;
     await admin.from("leads").update(rest).eq("id", leadId);
   }
+}
+
+/**
+ * Apply a human reply to the lead's revisit date.
+ * - The reply states new timing: move the date there (noting the old date
+ *   when the org came back before it).
+ * - No timing, and the stored date is still in the future: the org came back
+ *   early, so clear the date and note (logging the old values).
+ * - No timing, and the date is today or past: leave it (already surfaced).
+ * Returns true when the lead changed.
+ */
+async function applyRevisitForReply(
+  admin: Admin,
+  leadId: string,
+  reply: { fromName: string; revisitOn: string | null; revisitReason: string | null },
+): Promise<boolean> {
+  // Read fresh (select * so a missing revisit_note column isn't an error).
+  const { data } = await admin.from("leads").select("*").eq("id", leadId).maybeSingle();
+  const lead = data as { revisit_on?: string | null; revisit_note?: string | null } | null;
+  if (!lead) return false;
+  const oldOn = lead.revisit_on ?? null;
+  const oldNote = lead.revisit_note?.trim() || null;
+  const today = localDatePlus(0);
+  const early = Boolean(oldOn && oldOn > today);
+  const note = (detail: string) =>
+    admin.from("interactions").insert({ lead_id: leadId, kind: "note", detail });
+
+  if (reply.revisitOn) {
+    const newNote = reply.revisitReason?.trim() || null;
+    if (reply.revisitOn === oldOn && (!newNote || newNote === oldNote)) return false;
+    // Never blank out an existing note with an empty reason.
+    await updateRevisitFields(admin, leadId, {
+      revisit_on: reply.revisitOn,
+      ...(newNote ? { revisit_note: newNote } : {}),
+    });
+    if (early) {
+      await note(
+        `Revisit date changed from ${oldOn} (${oldNote ?? "no note"}) to ${reply.revisitOn} (${newNote ?? oldNote ?? "no note"}): ${reply.fromName} replied early.`,
+      );
+    } else {
+      await note(
+        `Revisit date set to ${reply.revisitOn}${newNote ? ` (${newNote})` : ""} (auto: reply from ${reply.fromName}).`,
+      );
+    }
+    return true;
+  }
+
+  if (!early) return false;
+  await updateRevisitFields(admin, leadId, { revisit_on: null, revisit_note: null });
+  await note(
+    `Revisit date ${oldOn} cleared (was: ${oldNote ?? "no note"}): ${reply.fromName} replied before the revisit date.`,
+  );
+  return true;
 }
 
 function senderAddress(from: string): string {
@@ -298,17 +352,7 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
         // decline. The later reply is still in the activity log.
         const downgrade = rank(target) < rank(l.status);
         if (target !== l.status && !PROTECTED.includes(l.status) && !downgrade) {
-          if (target === "back_burner" && revisitOn) {
-            // Only touch revisit fields when the reply gave a date, and never
-            // blank out a manually written note with an empty reason.
-            await updateRevisitFields(admin, l.id, {
-              status: target,
-              revisit_on: revisitOn,
-              ...(revisitReason ? { revisit_note: revisitReason } : {}),
-            });
-          } else {
-            await admin.from("leads").update({ status: target }).eq("id", l.id);
-          }
+          await admin.from("leads").update({ status: target }).eq("id", l.id);
           await admin.from("interactions").insert({
             lead_id: l.id,
             kind: "status_change",
@@ -318,17 +362,17 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
           });
           l.status = target; // later messages in this run see the new status
           updatedLeads.add(l.id);
-        } else if (target === "back_burner" && l.status === "back_burner" && revisitOn) {
-          // A newer deferral with a timeframe moves the revisit date.
-          await updateRevisitFields(admin, l.id, {
-            revisit_on: revisitOn,
-            ...(revisitReason ? { revisit_note: revisitReason } : {}),
+        }
+
+        // Revisit date. Runs once per reply: the message is recorded in
+        // reply_scan_messages after this run, so rescans never see it again.
+        if (!PROTECTED.includes(l.status)) {
+          const changed = await applyRevisitForReply(admin, l.id, {
+            fromName,
+            revisitOn,
+            revisitReason,
           });
-          await note(
-            l.id,
-            `Revisit date set to ${revisitOn}${revisitReason ? ` (${revisitReason})` : ""} (auto: reply from ${fromName}).`,
-          );
-          updatedLeads.add(l.id);
+          if (changed) updatedLeads.add(l.id);
         }
         revalidatePath(`/admin/leads/${l.id}`);
       }

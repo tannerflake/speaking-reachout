@@ -21,8 +21,9 @@ export interface ClassifiedReply {
   /** One-line, plain-English summary of the reply, for the activity log. */
   note: string;
   /**
-   * back_burner only: best-guess date (YYYY-MM-DD) to pick the conversation
-   * back up, when the reply gives a timeframe. Null otherwise.
+   * Best-guess date (YYYY-MM-DD) to pick the conversation back up, for any
+   * classification where the reply states future timing ("try us again in
+   * March"). Null when no timing is stated.
    */
   revisitOn: string | null;
   /**
@@ -55,7 +56,7 @@ Examples of "back_burner":
 - "We'll keep Senator Flake in mind for future events."
 - "Interesting idea. Maybe next year? Feel free to check back in the spring."
 
-Revisit date: for "back_burner" only, if the reply names or implies a timeframe, give a best-guess date (YYYY-MM-DD) when Jeff's team should follow up, using today's date (given in the message) to resolve relative phrases. Pick a date shortly BEFORE the timeframe so there is time to plan: "next fall" -> August 15 of the coming fall; "the spring" -> February 15 of the coming spring; "after budget season in March" -> April 1; "next year" -> January 15 of next year; "in a few months" -> about 3 months from today. Always return a future date. If no timeframe is given, or the classification is not back_burner, use null.
+Revisit date: for ANY classification (interested, back_burner, cant_pay, not_interested), if the reply names or implies a future timeframe for picking the conversation back up (e.g. "try us again in March", "let's talk again after the holidays", "reach out next fall about 2028"), give a best-guess date (YYYY-MM-DD) when Jeff's team should follow up, using today's date (given in the message) to resolve relative phrases. Pick a date shortly BEFORE the timeframe so there is time to plan: "next fall" -> August 15 of the coming fall; "the spring" -> February 15 of the coming spring; "after budget season in March" -> April 1; "next year" -> January 15 of next year; "in a few months" -> about 3 months from today. Always return a future date. If the reply states no future timing (including a plain decline, or an interested reply that just wants to proceed now), or the classification is auto_reply or unrelated, use null. Do not invent timing that is not in the reply.
 
 Revisit reason: whenever revisit_on is a date, also give "revisit_reason": a short plain-English reason for that date (max ~100 characters), e.g. "Said booked for 2027; reach out spring 2027 for 2028". Otherwise null.
 
@@ -137,7 +138,9 @@ ${body || "(empty)"}`;
         ? parsed.note.trim().slice(0, 200)
         : "(reply received)";
     const revisitOn =
-      classification === "back_burner" ? validRevisitDate(parsed.revisit_on, today) : null;
+      classification === "auto_reply" || classification === "unrelated"
+        ? null
+        : validRevisitDate(parsed.revisit_on, today);
     const revisitReason = revisitOn
       ? typeof parsed.revisit_reason === "string" && parsed.revisit_reason.trim()
         ? parsed.revisit_reason.trim().slice(0, 200)
