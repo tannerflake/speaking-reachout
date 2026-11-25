@@ -90,10 +90,12 @@ async function updateRevisitFields(
  * - No timing, and the date is today or past: leave it (already surfaced).
  * Returns true when the lead changed.
  */
-async function applyRevisitForReply(
+export async function applyRevisitForReply(
   admin: Admin,
   leadId: string,
   reply: { fromName: string; revisitOn: string | null; revisitReason: string | null },
+  /** Extra interaction columns (migration 0037), e.g. for bot imports. */
+  meta: { actor?: string | null; source_inbox?: string | null } = {},
 ): Promise<boolean> {
   // Read fresh (select * so a missing revisit_note column isn't an error).
   const { data } = await admin.from("leads").select("*").eq("id", leadId).maybeSingle();
@@ -104,7 +106,7 @@ async function applyRevisitForReply(
   const today = localDatePlus(0);
   const early = Boolean(oldOn && oldOn > today);
   const note = (detail: string) =>
-    admin.from("interactions").insert({ lead_id: leadId, kind: "note", detail });
+    admin.from("interactions").insert({ lead_id: leadId, kind: "note", detail, ...meta });
 
   if (reply.revisitOn) {
     const newNote = reply.revisitReason?.trim() || null;

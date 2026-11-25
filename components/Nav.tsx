@@ -12,6 +12,7 @@ const CRM_LINKS = [
   { href: "/admin/discover", label: "Discover" },
   { href: "/admin/voice-insights", label: "Voice & Insights" },
   { href: "/admin/settings/tailoring", label: "Tailoring" },
+  { href: "/admin/settings/bot-access", label: "Bot access" },
   { href: "/admin/site-editor", label: "Site editor" },
 ];
 

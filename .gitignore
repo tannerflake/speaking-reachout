@@ -30,3 +30,6 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# bot API key (operator-local; never commit)
+.bot-api-key.txt

@@ -49,7 +49,7 @@ export const PIPELINE_STATUSES: LeadStatus[] = [
 ];
 
 /** Where a lead originated: outbound discovery vs. the jeffflake.com form. */
-export type LeadSource = "outbound" | "website_inbound";
+export type LeadSource = "outbound" | "website_inbound" | "bot_import";
 
 /**
  * What a lead is (migration 0036): a speaking prospect, or a non-booking
@@ -227,6 +227,15 @@ export interface FollowupSequence {
   updated_at: string;
 }
 
+/** Engagement outcome (migration 0037). The DB trigger fills it when null. */
+export type BookingOutcome = "completed" | "upcoming" | "canceled";
+export const BOOKING_OUTCOMES: BookingOutcome[] = ["completed", "upcoming", "canceled"];
+
+/**
+ * One engagement (a speaking gig) for a lead. The bookings table is the
+ * engagement history: a lead keeps one status, and each year Jeff spoke there
+ * is a row here (migration 0037 added event_year, outcome and the rest).
+ */
 export interface Booking {
   id: string;
   lead_id: string;
@@ -236,6 +245,66 @@ export interface Booking {
   fee: number | null;
   is_recurring: boolean;
   notes: string | null;
+  created_at: string;
+  /** Filled from event_date (or guessed from the name/notes) by trigger. */
+  event_year?: number | null;
+  outcome?: BookingOutcome | null;
+  event_end_date?: string | null;
+  location?: string | null;
+  /** 'bot_import' for engagements the bot API created; null = by hand. */
+  source?: string | null;
+  source_inbox?: string | null;
+  updated_at?: string | null;
+}
+
+// ---- Bot import API (migration 0037) -------------------------------------
+export interface BotApiKey {
+  id: string;
+  label: string;
+  /** sha256 hex of the raw key. Server-only: never sent to the browser. */
+  key_hash: string;
+  key_prefix: string | null;
+  created_at: string;
+  created_by: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+}
+
+export interface BotActivity {
+  id: string;
+  key_id: string | null;
+  bot_name: string | null;
+  method: string | null;
+  endpoint: string | null;
+  lead_id: string | null;
+  source_inbox: string | null;
+  summary: string | null;
+  status_code: number | null;
+  created_at: string;
+}
+
+export type MessageDirection = "inbound" | "outbound";
+
+/** One email in a lead's correspondence log, imported from any inbox. */
+export interface LeadMessage {
+  id: string;
+  lead_id: string;
+  contact_id: string | null;
+  outreach_id: string | null;
+  direction: MessageDirection;
+  from_email: string | null;
+  from_name: string | null;
+  to_emails: string[];
+  cc_emails: string[];
+  sent_at: string | null;
+  subject: string | null;
+  body: string | null;
+  snippet: string | null;
+  source_inbox: string | null;
+  gmail_message_id: string | null;
+  gmail_thread_id: string | null;
+  rfc822_message_id: string | null;
+  created_by: string | null;
   created_at: string;
 }
 
@@ -254,6 +323,10 @@ export interface Interaction {
   kind: InteractionKind;
   detail: string | null;
   created_at: string;
+  /** Who wrote it: 'bot:<name>', 'user', 'system'; null = legacy (0037). */
+  actor?: string | null;
+  /** Inbox the entry came from, for bot imports (0037). */
+  source_inbox?: string | null;
 }
 
 export interface GmailConnection {

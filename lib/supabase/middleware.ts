@@ -21,6 +21,12 @@ function isProtected(path: string): boolean {
  * without a session are redirected to /admin/login.
  */
 export async function updateSession(request: NextRequest) {
+  // The bot import API authenticates with its own bearer keys (lib/bot/auth.ts)
+  // and must never be redirected to the login page or need a session.
+  if (request.nextUrl.pathname.startsWith("/api/bot/")) {
+    return NextResponse.next({ request });
+  }
+
   let supabaseResponse = NextResponse.next({ request });
 
   const url = getEnv("NEXT_PUBLIC_SUPABASE_URL");
