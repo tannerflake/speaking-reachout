@@ -11,6 +11,7 @@ import { MediaSection } from "@/components/public/sections/MediaSection";
 import { AuthoredBookSection } from "@/components/public/sections/AuthoredBookSection";
 import { Testimonials } from "@/components/public/sections/Testimonials";
 import { BookSection } from "@/components/public/sections/BookSection";
+import { StickyBookCta } from "@/components/public/StickyBookCta";
 import { InquirySection } from "@/components/public/sections/InquirySection";
 
 // Rendered dynamically so AI-editor changes appear immediately and the build
@@ -46,6 +47,10 @@ export default async function HomePage() {
         />
       </main>
       <PublicFooter signature={signature} email={c.book.fallback_email} />
+      <StickyBookCta
+        triggerId="hero-book-cta"
+        label={c.hero.cta_label ?? "Book Jeff as a Speaker"}
+      />
     </>
   );
 }

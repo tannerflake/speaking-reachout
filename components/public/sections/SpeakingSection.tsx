@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { Reveal } from "@/components/public/Reveal";
 import { TopicAccordion } from "@/components/public/TopicAccordion";
 import { imagePublicUrl } from "@/lib/site/images";
@@ -115,18 +114,6 @@ export function SpeakingSection({
             </Reveal>
           </div>
         )}
-
-        <Reveal>
-          <div className="mt-16">
-            <Link
-              href="/#book"
-              className="inline-flex items-center gap-2 rounded-md bg-oxford px-7 py-3.5 text-base font-semibold tracking-wide text-white transition-colors hover:bg-oxford-soft"
-            >
-              {data.cta_label ?? "Bring Jeff to your stage"}
-              <span aria-hidden>&rarr;</span>
-            </Link>
-          </div>
-        </Reveal>
       </div>
     </section>
   );

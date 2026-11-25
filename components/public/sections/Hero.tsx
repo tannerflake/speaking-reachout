@@ -55,6 +55,7 @@ export function Hero({
           )}
           <Reveal direction="up" delay={0.18}>
             <Link
+              id="hero-book-cta"
               href="/#book"
               className="mt-9 inline-flex items-center gap-2 rounded-md bg-brass-soft px-7 py-3.5 text-base font-semibold tracking-wide text-oxford transition-colors hover:bg-white"
             >

@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { getSiteContent } from "@/lib/site/content";
 import { PublicHeader } from "@/components/public/PublicHeader";
 import { PublicFooter } from "@/components/public/PublicFooter";
 import { SiteImage } from "@/components/public/SiteImage";
+import { StickyBookCta } from "@/components/public/StickyBookCta";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +26,7 @@ export default async function BioPage() {
         <h1 className="mt-4 font-display text-5xl font-medium leading-tight text-oxford">
           Jeff Flake
         </h1>
-        <p className="mt-5 text-lg leading-relaxed text-graphite/85">
+        <p id="bio-intro" className="mt-5 text-lg leading-relaxed text-graphite/85">
           Senator. Ambassador. Author. A voice that challenges without
           polarizing.
         </p>
@@ -53,18 +53,9 @@ export default async function BioPage() {
             );
           })}
         </div>
-
-        <div className="mt-16">
-          <Link
-            href="/#book"
-            className="inline-flex items-center gap-2 rounded-md bg-oxford px-7 py-3.5 text-base font-semibold tracking-wide text-white transition-colors hover:bg-oxford-soft"
-          >
-            Book Jeff as a speaker
-            <span aria-hidden>&rarr;</span>
-          </Link>
-        </div>
       </main>
       <PublicFooter signature={signature} email={c.book.fallback_email} />
+      <StickyBookCta triggerId="bio-intro" />
     </>
   );
 }

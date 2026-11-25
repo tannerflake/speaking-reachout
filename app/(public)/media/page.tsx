@@ -3,6 +3,7 @@ import { getSiteContent } from "@/lib/site/content";
 import { PublicHeader } from "@/components/public/PublicHeader";
 import { PublicFooter } from "@/components/public/PublicFooter";
 import { MediaSection } from "@/components/public/sections/MediaSection";
+import { StickyBookCta } from "@/components/public/StickyBookCta";
 import { FeaturedVideo } from "@/components/public/sections/FeaturedVideo";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ export default async function MediaPage() {
       <PublicHeader signature={signature} />
       <main className="pt-20">
         <div className="mx-auto max-w-6xl px-5 pt-12 sm:px-8">
-          <h1 className="font-display text-5xl font-medium text-oxford">
+          <h1 id="media-intro" className="font-display text-5xl font-medium text-oxford">
             In the Media
           </h1>
         </div>
@@ -31,6 +32,7 @@ export default async function MediaPage() {
         <FeaturedVideo videos={c.featuredVideos} images={c.images} />
       </main>
       <PublicFooter signature={signature} email={c.book.fallback_email} />
+      <StickyBookCta triggerId="media-intro" />
     </>
   );
 }

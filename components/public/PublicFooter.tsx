@@ -21,7 +21,7 @@ export function PublicFooter({
   const year = new Date().getFullYear();
 
   return (
-    <footer className="bg-oxford text-white">
+    <footer id="site-footer" className="bg-oxford text-white">
       {/* Thin brass rule as a restrained ornamental cap. */}
       <div className="h-px w-full bg-brass/50" />
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-12 sm:flex-row sm:items-center sm:justify-between sm:px-8">
