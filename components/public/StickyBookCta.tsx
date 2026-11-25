@@ -15,7 +15,7 @@ const DEFAULT_HIDE_IDS = ["book", "inquiries", "site-footer"];
  * footer) is on screen so it never covers the form or the page bottom.
  */
 export function StickyBookCta({
-  label = "Book Jeff as a Speaker",
+  label = "Book Jeff",
   triggerId,
   hideWhenVisibleIds = DEFAULT_HIDE_IDS,
 }: {

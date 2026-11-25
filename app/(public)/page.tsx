@@ -49,7 +49,6 @@ export default async function HomePage() {
       <PublicFooter signature={signature} email={c.book.fallback_email} />
       <StickyBookCta
         triggerId="hero-book-cta"
-        label={c.hero.cta_label ?? "Book Jeff as a Speaker"}
       />
     </>
   );
