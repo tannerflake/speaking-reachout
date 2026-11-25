@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { inquiryLeadIds } from "@/lib/leads/kind";
 import { getEnv } from "@/lib/env";
 import { enrichLeadCore, type EnrichResult } from "@/lib/enrich/pipeline";
 
@@ -125,7 +126,18 @@ async function claimNext(db: Db): Promise<string | null> {
     .eq("enrich_status", "pending")
     .order("created_at", { ascending: true })
     .limit(ENRICH_CONCURRENCY * 2);
-  for (const row of (data as Array<{ id: string; enrich_attempts: number }> | null) ?? []) {
+  const rows = (data as Array<{ id: string; enrich_attempts: number }> | null) ?? [];
+  // A non-booking inquiry is never enriched: take it off the queue instead.
+  const inquiries = await inquiryLeadIds(db, rows.map((r) => r.id));
+  for (const row of rows) {
+    if (inquiries.has(row.id)) {
+      await db
+        .from("leads")
+        .update({ enrich_status: null, enrich_error: null })
+        .eq("id", row.id)
+        .eq("enrich_status", "pending");
+      continue;
+    }
     if (await claim(db, row)) return row.id;
   }
   return null;
@@ -282,6 +294,9 @@ export async function kickEnrichWorkers(db: Db, ctx: KickContext): Promise<numbe
 /** Put leads (back) on the queue, e.g. the Retry button on a Discover run. */
 export async function requeueLeads(db: Db, leadIds: string[]): Promise<number> {
   if (leadIds.length === 0 || !(await enrichQueueAvailable(db))) return 0;
+  const inquiries = await inquiryLeadIds(db, leadIds);
+  leadIds = leadIds.filter((id) => !inquiries.has(id));
+  if (leadIds.length === 0) return 0;
   const { data } = await db
     .from("leads")
     .update({ enrich_status: "pending", enrich_attempts: 0, enrich_error: null })

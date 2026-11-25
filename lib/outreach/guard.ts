@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isInquiryLead, leadKindAvailable } from "@/lib/leads/kind";
 import { getGmailClient } from "@/lib/gmail/send";
 import { withGmailRetry } from "@/lib/gmail/retry";
 import {
@@ -183,6 +184,8 @@ export async function resolveOrganization(
 }
 
 interface OrgSnapshot {
+  /** Inquiry leads (migration 0036): never members of another lead's org. */
+  inquiryIds?: Set<string>;
   leads: LeadRow[];
   contacts: ContactRow[];
   domainsByLead: Map<string, Set<string>>;
@@ -209,9 +212,12 @@ export async function selectAll<T>(
 }
 
 async function loadOrgSnapshot(db: Db): Promise<OrgSnapshot> {
-  const [leads, contacts] = await Promise.all([
-    selectAll<LeadRow>(() =>
-      db.from("leads").select("id, name, name_normalized, status, website"),
+  const withKind = await leadKindAvailable(db);
+  const [allLeads, contacts] = await Promise.all([
+    selectAll<LeadRow & { kind?: string }>(() =>
+      db
+        .from("leads")
+        .select(`id, name, name_normalized, status, website${withKind ? ", kind" : ""}`),
     ),
     // referred_by_contact_id arrives with migration 0034; read without it
     // until then rather than failing the guard.
@@ -221,6 +227,12 @@ async function loadOrgSnapshot(db: Db): Promise<OrgSnapshot> {
       selectAll<ContactRow>(() => db.from("contacts").select("id, lead_id, email")),
     ),
   ]);
+
+  const leads: LeadRow[] = allLeads;
+  // Non-booking inquiries (press, students, other) are people, not
+  // organizations in conversation: a student writing from a university
+  // address must not block outreach to that university.
+  const inquiryIds = new Set(allLeads.filter((l) => l.kind === "inquiry").map((l) => l.id));
 
   // Domains per lead: website + every contact's org email domain.
   const domainsByLead = new Map<string, Set<string>>();
@@ -236,7 +248,7 @@ async function loadOrgSnapshot(db: Db): Promise<OrgSnapshot> {
     const d = orgDomainOfEmail(c.email);
     if (d && !isSharedEventDomain(d)) domainsByLead.get(c.lead_id)?.add(d);
   }
-  return { leads, contacts, domainsByLead };
+  return { leads, contacts, domainsByLead, inquiryIds };
 }
 
 function orgMembers(
@@ -264,6 +276,7 @@ function orgMembers(
   const members: LeadRow[] = [lead];
   for (const other of leads) {
     if (other.id === leadId) continue;
+    if (snap.inquiryIds?.has(other.id)) continue;
     const otherDomains = domainsByLead.get(other.id) ?? new Set<string>();
     let same = [...otherDomains].some((d) => domains.has(d));
     if (!same) {
@@ -384,6 +397,7 @@ export async function crmBlockReasons(
   ]);
   for (const id of leadIds) {
     if (!snap.leads.some((l) => l.id === id)) continue;
+    if (snap.inquiryIds?.has(id)) continue;
     const { members, domains, referrals } = orgMembers(snap, id);
     const conflicts = crmConflicts(id, members, sent, referrals);
     if (conflicts.length === 0) continue;
@@ -424,9 +438,11 @@ export async function markLeadAlreadyInContact(
 ): Promise<boolean> {
   const { data: lead } = await db
     .from("leads")
-    .select("status")
+    .select("*")
     .eq("id", leadId)
     .maybeSingle();
+  // Non-booking inquiries never get moved to Already in contact.
+  if (isInquiryLead(lead as { kind?: string } | null)) return false;
   const status = (lead as { status: LeadStatus } | null)?.status;
   if (status !== "new" && status !== "reached_out") return false;
   if (status === "reached_out") {

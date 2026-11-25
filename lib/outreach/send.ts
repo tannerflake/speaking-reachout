@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { INQUIRY_REFUSAL, inquiryLeadIds } from "@/lib/leads/kind";
 import { GmailNotConnectedError, sendGmail } from "@/lib/gmail/send";
 import { getOutreachOnePager } from "@/lib/gmail/attachments";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -100,6 +101,15 @@ export async function sendOutreachRow(
 
   const row = data as Outreach & { contact: Contact | null };
   if (row.status === "sent") return { error: "Already sent.", leadId: row.lead_id };
+
+  // Non-booking inquiries are answered by hand, never by this app.
+  if ((await inquiryLeadIds(db, [row.lead_id])).has(row.lead_id)) {
+    await db
+      .from("outreach")
+      .update({ status: "failed", error: INQUIRY_REFUSAL, scheduled_for: null })
+      .eq("id", outreachId);
+    return { error: INQUIRY_REFUSAL, leadId: row.lead_id };
+  }
 
   const email = row.contact?.email ?? null;
   if (!looksLikeRealEmail(email)) {
@@ -426,10 +436,17 @@ export async function queueOutreach(
   }));
   const result: QueueResult = { ...EMPTY_QUEUE };
 
+  // Non-booking inquiries are never scheduled.
+  const inquiries = await inquiryLeadIds(db, rows.map((r) => r.lead_id));
+
   // 0. Bulk runs (by lead) never schedule a referred contact: someone at the
   // org pointed us to them and Jeff/Cheryl write to them by hand. A draft
   // picked explicitly (by id) still goes through the engagement guard.
   const candidates = rows.filter((r) => {
+    if (inquiries.has(r.lead_id)) {
+      result.blocked += 1;
+      return false;
+    }
     const referred =
       outreachIds.length === 0 &&
       !r.guard_override_at &&

@@ -52,6 +52,14 @@ export const PIPELINE_STATUSES: LeadStatus[] = [
 export type LeadSource = "outbound" | "website_inbound";
 
 /**
+ * What a lead is (migration 0036): a speaking prospect, or a non-booking
+ * website inquiry (press, interview/student, other) that is handled by hand
+ * and kept out of outreach, enrichment, follow-ups and pipeline stats.
+ */
+export type LeadKind = "speaking" | "inquiry";
+export type InquiryType = "press" | "interview_student" | "other";
+
+/**
  * "bounced" = a hard bounce came back; "invalid" = the email verifier says the
  * mailbox doesn't exist. Neither is ever emailed again (migration 0031).
  */
@@ -119,6 +127,9 @@ export interface Lead {
   attribution_override_by?: string | null;
   attribution_override_at?: string | null;
   source: LeadSource;
+  /** Absent until migration 0036; treat missing as 'speaking'. */
+  kind?: LeadKind;
+  inquiry_type?: InquiryType | null;
   name_normalized: string;
   created_at: string;
   updated_at: string;

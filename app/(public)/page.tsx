@@ -11,6 +11,7 @@ import { MediaSection } from "@/components/public/sections/MediaSection";
 import { AuthoredBookSection } from "@/components/public/sections/AuthoredBookSection";
 import { Testimonials } from "@/components/public/sections/Testimonials";
 import { BookSection } from "@/components/public/sections/BookSection";
+import { InquirySection } from "@/components/public/sections/InquirySection";
 
 // Rendered dynamically so AI-editor changes appear immediately and the build
 // never depends on a reachable database.
@@ -40,6 +41,9 @@ export default async function HomePage() {
         <AuthoredBookSection data={c.authoredBook} images={c.images} />
         <Testimonials items={c.testimonials} images={c.images} />
         <BookSection data={c.book} images={c.images} />
+        <InquirySection
+          fallbackEmail={c.book.fallback_email ?? "cheryl@jeffflake.com"}
+        />
       </main>
       <PublicFooter signature={signature} email={c.book.fallback_email} />
     </>

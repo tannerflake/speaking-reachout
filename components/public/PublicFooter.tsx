@@ -33,7 +33,7 @@ export function PublicFooter({
           <Seal size={40} />
           <SignatureLogo image={signature} height={54} />
         </Link>
-        <nav className="flex flex-wrap gap-x-7 gap-y-2">
+        <nav className="flex flex-wrap items-center gap-x-7 gap-y-2">
           {QUICK_LINKS.map((l) => (
             <Link
               key={l.href}
@@ -43,6 +43,12 @@ export function PublicFooter({
               {l.label}
             </Link>
           ))}
+          <Link
+            href="/#inquiries"
+            className="text-xs tracking-wide text-white/50 transition-colors hover:text-white"
+          >
+            Press &amp; other inquiries
+          </Link>
         </nav>
         <a
           href={`mailto:${email}`}

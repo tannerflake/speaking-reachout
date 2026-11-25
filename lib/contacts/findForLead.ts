@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { INQUIRY_REFUSAL, isInquiryLead } from "@/lib/leads/kind";
 import { getContactResolver } from "@/lib/contacts/resolver";
 import {
   MAX_CONTACTS_PER_LEAD,
@@ -40,11 +41,13 @@ export async function findContactsForLead(
   const { data } = await supabase
     .from("leads")
     .select(
-      "id, name, type, description, location_region, location_country, website, source_url, contacts(*)",
+      "*, contacts(*)",
     )
     .eq("id", leadId)
     .single();
   if (!data) return { ...empty, error: "Lead not found." };
+  // Non-booking inquiries never trigger paid contact lookups.
+  if (isInquiryLead(data as { kind?: string })) return { ...empty, error: INQUIRY_REFUSAL };
 
   const lead = data as {
     id: string;

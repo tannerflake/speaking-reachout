@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { INQUIRY_REFUSAL, isInquiryLead } from "@/lib/leads/kind";
 import { findContactsForLead } from "@/lib/contacts/findForLead";
 import {
   BLOCKED_PREFIX,
@@ -54,6 +55,10 @@ export async function enrichLeadCore(
   const { data: leadRow } = await db.from("leads").select("*").eq("id", leadId).maybeSingle();
   if ((leadRow as { merged_into_id?: string | null } | null)?.merged_into_id) {
     return { ...out, blocked: true, error: "Merged into another lead." };
+  }
+  // Non-booking inquiries never get contact finding or drafts.
+  if (isInquiryLead(leadRow as { kind?: string } | null)) {
+    return { ...out, blocked: true, error: INQUIRY_REFUSAL };
   }
 
   const found = await findContactsForLead(db, leadId);

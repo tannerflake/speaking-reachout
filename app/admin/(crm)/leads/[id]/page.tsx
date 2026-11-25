@@ -15,6 +15,7 @@ import {
   QueuedBadge,
   ReferredBadge,
   HolidayOooBadge,
+  InquiryBadge,
   RevisitBadge,
   SourceBadge,
   StatusBadge,
@@ -50,6 +51,7 @@ import {
   availableContactSources,
 } from "@/lib/contacts/multiSource";
 import { getEnv } from "@/lib/env";
+import { NON_BOOKING_NOTE, inquiryLeadIds } from "@/lib/leads/kind";
 import { formatDate, formatDateTime, looksLikeRealEmail } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -89,9 +91,15 @@ export default async function LeadDetailPage({
 }) {
   const { id } = await params;
 
+  // Non-booking inquiries skip the engagement guard (no outreach, and it must
+  // never move them to Already in contact).
+  const inquiry = (await inquiryLeadIds(await createClient(), [id])).has(id);
+
   // The guard runs first: it may move the lead to Already in contact, and
   // the page should show the status and activity it just wrote.
-  const checked = await loadGuard(id);
+  const checked: GuardView = inquiry
+    ? { kind: "unavailable", error: NON_BOOKING_NOTE }
+    : await loadGuard(id);
   const lead = await getLead(id);
   if (!lead) notFound();
   const [interactions, followups, blockedReasons] = await Promise.all([
@@ -136,7 +144,7 @@ export default async function LeadDetailPage({
   // and the lead has a domain to search. (Hunter is never called automatically.)
   const resolverName = contactResolverName();
   const canResolve =
-    resolverName !== "claude" && Boolean(lead.website || lead.source_url);
+    !inquiry && resolverName !== "claude" && Boolean(lead.website || lead.source_url);
 
   return (
     <div className="space-y-6">
@@ -153,6 +161,7 @@ export default async function LeadDetailPage({
           <QueuedBadge
             count={lead.outreach.filter((o) => o.status === "queued").length}
           />
+          <InquiryBadge lead={lead} />
           <TypeBadge type={lead.type} />
           <StatusBadge status={lead.status} />
           <SourceBadge source={lead.source} />
@@ -164,6 +173,13 @@ export default async function LeadDetailPage({
           {mergedInto && <MergedBadge />}
           <RevisitBadge on={lead.revisit_on} note={lead.revisit_note} />
         </div>
+        {inquiry && (
+          <p className="mt-2 rounded-md border border-fuchsia-200 bg-fuchsia-50 px-3 py-2 text-sm text-fuchsia-900">
+            <span className="font-semibold">{NON_BOOKING_NOTE}</span> Outreach
+            drafting, contact finding, sending and follow-ups are off for this
+            lead.
+          </p>
+        )}
         {mergedInto && (
           <p className="mt-2 rounded-md border border-zinc-300 bg-zinc-100 px-3 py-2 text-sm text-zinc-800">
             <span className="font-semibold">Merged into </span>
@@ -271,15 +287,17 @@ export default async function LeadDetailPage({
           {/* Contacts */}
           <section>
             <h2 className="mb-2 text-sm font-medium text-zinc-500">Contacts</h2>
-            <FindContactsButton
-              leadId={lead.id}
-              sources={availableContactSources()}
-              max={MAX_CONTACTS_PER_LEAD}
-              hunterAvailable={
-                Boolean(getEnv("HUNTER_API_KEY")) &&
-                Boolean(lead.website || lead.source_url)
-              }
-            />
+            {!inquiry && (
+              <FindContactsButton
+                leadId={lead.id}
+                sources={availableContactSources()}
+                max={MAX_CONTACTS_PER_LEAD}
+                hunterAvailable={
+                  Boolean(getEnv("HUNTER_API_KEY")) &&
+                  Boolean(lead.website || lead.source_url)
+                }
+              />
+            )}
             {lead.contacts.length === 0 ? (
               <p className="text-sm text-zinc-500">No contacts.</p>
             ) : (
@@ -337,7 +355,7 @@ export default async function LeadDetailPage({
                 ))}
               </ul>
             )}
-            {!mergedInto && (
+            {!mergedInto && !inquiry && (
               <details className="mt-3 rounded-md border border-zinc-200 bg-white p-3 text-sm">
                 <summary className="cursor-pointer font-medium text-zinc-700">
                   Add referred contact
@@ -362,12 +380,18 @@ export default async function LeadDetailPage({
           {/* Outreach */}
           <section>
             <h2 className="mb-2 text-sm font-medium text-zinc-500">Outreach</h2>
-            <OutreachManager
-              leadId={lead.id}
-              contacts={lead.contacts}
-              outreach={lead.outreach}
-              guard={guard}
-            />
+            {inquiry ? (
+              <p className="text-sm text-zinc-500">
+                {NON_BOOKING_NOTE} No outreach is drafted or sent from here.
+              </p>
+            ) : (
+              <OutreachManager
+                leadId={lead.id}
+                contacts={lead.contacts}
+                outreach={lead.outreach}
+                guard={guard}
+              />
+            )}
           </section>
         </div>
 
@@ -389,13 +413,15 @@ export default async function LeadDetailPage({
             />
           </section>
 
-          {/* Automated follow-ups */}
-          <section className="rounded-lg border border-zinc-200 bg-white p-4">
-            <h2 className="mb-2 text-sm font-medium text-zinc-500">
-              Follow-ups
-            </h2>
-            <FollowupsPanel sequences={followups} contacts={lead.contacts} />
-          </section>
+          {/* Automated follow-ups (never for non-booking inquiries) */}
+          {!inquiry && (
+            <section className="rounded-lg border border-zinc-200 bg-white p-4">
+              <h2 className="mb-2 text-sm font-medium text-zinc-500">
+                Follow-ups
+              </h2>
+              <FollowupsPanel sequences={followups} contacts={lead.contacts} />
+            </section>
+          )}
 
           {/* Bookings */}
           {(lead.status === "booked" || lead.bookings.length > 0) && (
@@ -492,7 +518,7 @@ export default async function LeadDetailPage({
           so none of it is triggered by accident. */}
       <details className="rounded-lg border border-zinc-200 bg-white p-4">
         <summary className="cursor-pointer text-sm font-medium text-zinc-600">
-          Advanced: merge, attribution
+          Advanced: lead kind, merge, attribution
         </summary>
         <div className="mt-4">
           <LeadAdvancedPanel
@@ -500,6 +526,8 @@ export default async function LeadDetailPage({
             leadName={lead.name}
             origin={origin}
             merged={Boolean(mergedInto)}
+            kind={lead.kind}
+            inquiryType={lead.inquiry_type ?? null}
             history={attributionHistory.map((h) => ({
               id: h.id,
               detail: h.detail,

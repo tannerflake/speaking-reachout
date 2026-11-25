@@ -21,6 +21,7 @@ import {
   NeedsVerificationBadge,
   RevisitBadge,
   SourceBadge,
+  InquiryBadge,
   StatusBadge,
   TypeBadge,
   WorkingBadge,
@@ -1064,6 +1065,7 @@ export function LeadsView({
                       <NeedsVerificationBadge count={r.needsVerificationCount} />
                       <LeadHolidayOooBadge until={r.holidayOooUntil} />
                       <SourceBadge source={r.source} />
+                      <InquiryBadge lead={r} />
                       <RevisitBadge
                         on={
                           r.merged_into_id || REVISIT_TERMINAL_STATUSES.includes(r.status)

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/profile";
 import { Nav } from "@/components/Nav";
+import { countNewInquiries } from "@/lib/data";
 import { SignOutButton } from "@/components/SignOutButton";
 
 export default async function AdminLayout({
@@ -12,6 +13,8 @@ export default async function AdminLayout({
   // Defense in depth — the proxy already gates /admin, but guard here too.
   const me = await getCurrentUser();
   if (!me) redirect("/admin/login");
+  const newInquiries =
+    me.role === "editor" ? 0 : await countNewInquiries().catch(() => 0);
 
   return (
     <div className="min-h-screen">
@@ -21,7 +24,7 @@ export default async function AdminLayout({
             <Link href="/admin" className="text-sm font-semibold text-zinc-900">
               {me.role === "editor" ? "Site Editor" : "Speaker Outreach CRM"}
             </Link>
-            <Nav role={me.role} />
+            <Nav role={me.role} newInquiries={newInquiries} />
           </div>
           <div className="flex items-center gap-3">
             <Link

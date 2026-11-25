@@ -8,6 +8,7 @@ import {
   summarizeConflicts,
 } from "@/lib/outreach/guard";
 import { looksLikeRealEmail } from "@/lib/utils";
+import { INQUIRY_REFUSAL, isInquiryLead } from "@/lib/leads/kind";
 import type { Contact } from "@/lib/types";
 
 // Works with either the operator's cookie-bound client (server actions) or
@@ -26,12 +27,16 @@ export async function draftingBlocked(
   leadId: string,
   acknowledged: boolean | undefined,
 ): Promise<string | null> {
-  if (acknowledged) return null;
   const { data: lead } = await db
     .from("leads")
     .select("*")
     .eq("id", leadId)
     .maybeSingle();
+  // Non-booking inquiries are never drafted for, even with "Draft anyway".
+  if (isInquiryLead(lead as { kind?: string } | null)) {
+    return `${BLOCKED_PREFIX} ${INQUIRY_REFUSAL}`;
+  }
+  if (acknowledged) return null;
   if ((lead as { merged_into_id?: string | null } | null)?.merged_into_id) {
     return `${BLOCKED_PREFIX} This lead was merged into another lead; work on that one instead.`;
   }

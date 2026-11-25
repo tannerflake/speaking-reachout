@@ -1,4 +1,5 @@
 import { revalidatePath } from "next/cache";
+import { inquiryLeadIds } from "@/lib/leads/kind";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { getScannedReplyIds } from "@/lib/data";
 import { GmailReadScopeMissingError, ingestMessages } from "@/lib/gmail/ingest";
@@ -214,6 +215,10 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
     // Nothing sent yet → nothing to scan against.
     if (leads.size === 0) return { nothingNew: true, scanned: 0 };
 
+    // Non-booking inquiries (a lead reclassified after outreach went out):
+    // replies are still logged, but status and revisit dates never change.
+    const inquiries = await inquiryLeadIds(admin, [...leads.keys()]);
+
     function match(m: IngestedMessage): Match | null {
       const t = threads.get(m.threadId);
       if (t) return { kind: "thread", outreachId: t.outreachId, leads: [t.lead] };
@@ -345,7 +350,7 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
         det.holiday =
           det.holiday || oooHoliday || Boolean(det.returnDate && inHolidayWindow(det.returnDate));
 
-        if (det.holiday) {
+        if (det.holiday && !hit.leads.some((l) => inquiries.has(l.id))) {
           const resume = holidayResumeDate(det, today);
           if (resume > today) {
             const res = await applyHolidayOoo(admin, {
@@ -399,7 +404,10 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
               : ""
           }`,
         );
-        if (ambiguous) continue;
+        if (ambiguous || inquiries.has(l.id)) {
+          revalidatePath(`/admin/leads/${l.id}`);
+          continue;
+        }
 
         const target: LeadStatus =
           classification === "interested"

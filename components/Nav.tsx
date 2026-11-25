@@ -8,6 +8,7 @@ import type { UserRole } from "@/lib/auth/profile";
 const CRM_LINKS = [
   { href: "/admin", label: "Dashboard", exact: true },
   { href: "/admin/leads", label: "Leads" },
+  { href: "/admin/inquiries", label: "Inquiries", badge: "inquiries" as const },
   { href: "/admin/discover", label: "Discover" },
   { href: "/admin/voice-insights", label: "Voice & Insights" },
   { href: "/admin/settings/tailoring", label: "Tailoring" },
@@ -19,7 +20,14 @@ const EDITOR_LINKS = [
   { href: "/admin/site-editor", label: "Site editor", exact: true },
 ];
 
-export function Nav({ role = "crm_admin" }: { role?: UserRole }) {
+export function Nav({
+  role = "crm_admin",
+  newInquiries = 0,
+}: {
+  role?: UserRole;
+  /** Inquiry leads still at status New (count badge on Inquiries). */
+  newInquiries?: number;
+}) {
   const pathname = usePathname();
   const links = role === "editor" ? EDITOR_LINKS : CRM_LINKS;
   return (
@@ -40,6 +48,14 @@ export function Nav({ role = "crm_admin" }: { role?: UserRole }) {
             )}
           >
             {l.label}
+            {"badge" in l && l.badge === "inquiries" && newInquiries > 0 && (
+              <span
+                className="ml-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-fuchsia-600 px-1.5 text-[11px] font-semibold text-white"
+                title={`${newInquiries} new inquir${newInquiries === 1 ? "y" : "ies"}`}
+              >
+                {newInquiries}
+              </span>
+            )}
           </Link>
         );
       })}

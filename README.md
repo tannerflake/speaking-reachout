@@ -282,6 +282,18 @@ Apply `supabase/migrations/0020_followups.sql` before using this.
 
 ---
 
+- **Press & other inquiries** (`app/actions/inquiry.ts`, `lib/leads/kind.ts`,
+  migration `0036_lead_kind_inquiry.sql`). A secondary form under the booking
+  section on jeffflake.com (and `/#inquiries` in the footer) creates a lead
+  with `kind='inquiry'` and an `inquiry_type` (press, interview_student,
+  other), the person as a contact, and a note, then emails
+  `BOOKING_NOTIFY_EMAIL` (Reply-To: the submitter). Inquiry leads are never
+  drafted for, enriched, followed up, scheduled, status-changed by the reply
+  scan, counted in pipeline stats, or shown in revisit lists; they live at
+  `/admin/inquiries` and under the Leads page "Inquiries" toggle. A lead's
+  kind can be changed in its Advanced panel. Before 0036 is applied the kind
+  filters are skipped and the form only sends the email.
+
 ## 8. Engagement guard (never email an org we're already talking to)
 
 Before any email leaves the app, [`lib/outreach/guard.ts`](lib/outreach/guard.ts)

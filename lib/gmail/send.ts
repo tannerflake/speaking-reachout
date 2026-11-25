@@ -42,6 +42,8 @@ export async function sendGmail(params: {
   };
   /** Files to attach. The message becomes multipart/mixed when non-empty. */
   attachments?: EmailAttachment[];
+  /** Optional Reply-To header (website inquiry notifications). */
+  replyTo?: string;
 }): Promise<SendResult> {
   const { gmail, conn } = await getGmailClient();
   // Last line of defense: model citation markup must never reach a recipient,
@@ -56,6 +58,7 @@ export async function sendGmail(params: {
     inReplyTo: params.thread?.inReplyTo ?? undefined,
     references: params.thread?.references,
     attachments: params.attachments,
+    replyTo: params.replyTo,
   });
 
   // Retry only rate-limit refusals: a 5xx might have delivered the message,
@@ -155,6 +158,8 @@ export function buildRawMessage(opts: {
   inReplyTo?: string;
   references?: string[];
   attachments?: EmailAttachment[];
+  /** Optional Reply-To address (e.g. a website inquiry's submitter). */
+  replyTo?: string;
 }): string {
   return base64Url(buildMimeMessage(opts));
 }
@@ -172,10 +177,13 @@ export function buildMimeMessage(opts: {
   inReplyTo?: string;
   references?: string[];
   attachments?: EmailAttachment[];
+  /** Optional Reply-To address (e.g. a website inquiry's submitter). */
+  replyTo?: string;
 }): string {
   const headers = [
     `To: ${opts.to}`,
     opts.from ? `From: ${opts.from}` : null,
+    opts.replyTo ? `Reply-To: ${opts.replyTo.replace(/[\r\n]/g, "")}` : null,
     `Subject: ${encodeHeader(opts.subject)}`,
     opts.inReplyTo ? `In-Reply-To: ${opts.inReplyTo}` : null,
     opts.references?.length ? `References: ${opts.references.join(" ")}` : null,

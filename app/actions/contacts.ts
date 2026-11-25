@@ -1,5 +1,6 @@
 "use server";
 
+import { INQUIRY_REFUSAL, inquiryLeadIds } from "@/lib/leads/kind";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getContactResolver } from "@/lib/contacts/resolver";
@@ -40,6 +41,9 @@ export async function resolveContactEmail(
   if (!data) return { error: "Contact not found." };
 
   const contact = data as ContactWithLead;
+  if ((await inquiryLeadIds(supabase, [contact.lead_id])).has(contact.lead_id)) {
+    return { error: INQUIRY_REFUSAL };
+  }
   if (looksLikeRealEmail(contact.email)) {
     return { email: contact.email as string, provider: "existing" };
   }
@@ -145,6 +149,9 @@ export async function relookupContact(
   if (!data) return { error: "Contact not found." };
 
   const contact = data as ContactWithLead;
+  if ((await inquiryLeadIds(supabase, [contact.lead_id])).has(contact.lead_id)) {
+    return { error: INQUIRY_REFUSAL };
+  }
 
   const resolver = getContactResolver();
   if (resolver.name === "claude") {
@@ -239,6 +246,8 @@ export async function bulkFindContacts(
     .from("leads")
     .select("id, name, website, source_url, contacts(*)")
     .in("id", leadIds);
+  // Non-booking inquiries never get paid lookups.
+  const inquiries = await inquiryLeadIds(supabase, leadIds);
 
   type LeadRow = {
     id: string;
@@ -247,7 +256,7 @@ export async function bulkFindContacts(
     source_url: string | null;
     contacts: Contact[];
   };
-  const leads = (data as LeadRow[]) ?? [];
+  const leads = ((data as LeadRow[]) ?? []).filter((l) => !inquiries.has(l.id));
 
   let found = 0;
   let skipped = 0;

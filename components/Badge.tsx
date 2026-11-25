@@ -13,6 +13,7 @@ import type {
 } from "@/lib/types";
 import { localDatePlus, originValueLabel, type OriginValue } from "@/lib/attribution";
 import { prettyDate } from "@/lib/followups/holiday";
+import { inquiryBadge } from "@/lib/leads/kind";
 
 function Pill({
   children,
@@ -176,6 +177,24 @@ export function ReferredBadge({ by }: { by: string }) {
  * Marks leads that arrived through the jeffflake.com booking form. Renders
  * nothing for outbound (discovered) leads to keep the common case uncluttered.
  */
+/** "Press inquiry" etc. on a non-booking inquiry lead; nothing otherwise. */
+export function InquiryBadge({
+  lead,
+}: {
+  lead: { kind?: string | null; inquiry_type?: string | null };
+}) {
+  const label = inquiryBadge(lead);
+  if (!label) return null;
+  return (
+    <Pill
+      className="border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800"
+      title="Non-booking inquiry. Reply manually from Cheryl's inbox."
+    >
+      {label}
+    </Pill>
+  );
+}
+
 export function SourceBadge({ source }: { source: LeadSource }) {
   if (source !== "website_inbound") return null;
   return (

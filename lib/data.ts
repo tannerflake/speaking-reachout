@@ -36,6 +36,8 @@ import type {
   VoiceProfile,
 } from "@/lib/types";
 import { LEAD_STATUSES, PIPELINE_STATUSES } from "@/lib/types";
+import type { InquiryType, LeadKind } from "@/lib/types";
+import { leadKindAvailable, speakingOnly } from "@/lib/leads/kind";
 import {
   REVISIT_LOOKAHEAD_DAYS,
   REVISIT_TERMINAL_STATUSES,
@@ -101,6 +103,8 @@ export interface LeadListRow extends Lead {
 }
 
 export interface LeadFilters {
+  /** Default 'speaking': inquiries only show when asked for. */
+  kind?: LeadKind;
   status?: LeadStatus;
   country?: string;
   type?: LeadType;
@@ -109,7 +113,11 @@ export interface LeadFilters {
 
 export async function getPipelineCounts(): Promise<Record<LeadStatus, number>> {
   const supabase = await createClient();
-  const { data } = await supabase.from("leads").select("status");
+  // Pipeline stats count speaking leads only; inquiries have their own view.
+  const { data } = await speakingOnly(
+    supabase.from("leads").select("status"),
+    await leadKindAvailable(supabase),
+  );
   const counts = Object.fromEntries(
     LEAD_STATUSES.map((s) => [s, 0]),
   ) as Record<LeadStatus, number>;
@@ -136,6 +144,9 @@ export async function getRecentInteractions(
 
 export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
   const supabase = await createClient();
+  const kindAvailable = await leadKindAvailable(supabase);
+  // Before migration 0036 there are no inquiries to show.
+  if (filters.kind === "inquiry" && !kindAvailable) return [];
   const build = (contactCols: string) => {
     let query = supabase
       .from("leads")
@@ -143,6 +154,7 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
         `*, contacts(${contactCols}), interactions(created_at), outreach(status, sent_via, sent_at, contact_id, error, scheduled_for)`,
       )
       .order("created_at", { ascending: false });
+    if (kindAvailable) query = query.eq("kind", filters.kind ?? "speaking");
     if (filters.status) query = query.eq("status", filters.status);
     if (filters.type) query = query.eq("type", filters.type);
     if (filters.country) query = query.eq("location_country", filters.country);
@@ -392,10 +404,9 @@ export async function getDueRevisits(): Promise<DueRevisit[]> {
   const supabase = await createClient();
   const today = localDatePlus(0);
   const horizon = localDatePlus(REVISIT_LOOKAHEAD_DAYS);
+  const kindAvailable = await leadKindAvailable(supabase);
   const build = (select: string) =>
-    supabase
-      .from("leads")
-      .select(select)
+    speakingOnly(supabase.from("leads").select(select), kindAvailable)
       .not("revisit_on", "is", null)
       .lte("revisit_on", horizon)
       .not("status", "in", `(${REVISIT_TERMINAL_STATUSES.join(",")})`)
@@ -550,7 +561,8 @@ export async function getExistingLeadKeys(): Promise<{
   // already in the CRM is never pulled again. Paged, because Supabase caps a
   // plain select at 1,000 rows and contacts passed that; and a failed read
   // throws rather than dedupe against a partial list.
-  const [leadRows, engagements, inbound, contactRows] = await Promise.all([
+  const kindAvailable = await leadKindAvailable(admin);
+  const [leadRows, engagements, inbound, contactRows, inquiryRows] = await Promise.all([
     selectAll<{ name: string; name_normalized: string | null; website: string | null }>(
       () => admin.from("leads").select("id, name, name_normalized, website"),
     ),
@@ -559,10 +571,19 @@ export async function getExistingLeadKeys(): Promise<{
       .select("data")
       .eq("section_key", "engagement"),
     admin.from("inbound_leads").select("organization"),
-    selectAll<{ email: string | null }>(() =>
-      admin.from("contacts").select("id, email"),
+    selectAll<{ email: string | null; lead_id: string }>(() =>
+      admin.from("contacts").select("id, email, lead_id"),
     ),
+    kindAvailable
+      ? selectAll<{ id: string }>(() =>
+          admin.from("leads").select("id").eq("kind", "inquiry"),
+        )
+      : Promise.resolve([] as { id: string }[]),
   ]);
+  // Non-booking inquiries (press, students) are people, not prospects: their
+  // email domain (a student's university) must not hide that org from
+  // Discover. Their names and addresses still dedupe.
+  const inquiryIds = new Set(inquiryRows.map((r) => r.id));
   if (engagements.error) throw new Error(engagements.error.message);
   if (inbound.error) throw new Error(inbound.error.message);
 
@@ -572,6 +593,7 @@ export async function getExistingLeadKeys(): Promise<{
   for (const row of contactRows) {
     const email = (row as { email: string | null }).email;
     if (email) emails.add(email.trim().toLowerCase());
+    if (inquiryIds.has(row.lead_id)) continue;
     const d = orgDomainOfEmail(email);
     if (d) domains.add(d);
   }
@@ -733,4 +755,66 @@ export async function getRecentDiscoveryRuns(
     };
   });
   return { available: true, runs };
+}
+
+// ---- Non-booking inquiries (migration 0036) --------------------------------
+
+export interface InquiryRow {
+  id: string;
+  name: string;
+  status: LeadStatus;
+  inquiry_type: InquiryType | null;
+  created_at: string;
+  contactName: string | null;
+  email: string | null;
+  phone: string | null;
+  /** The submitter's message, from the "Website ... inquiry." note. */
+  message: string | null;
+}
+
+/** Inquiry leads, newest first. Empty before migration 0036. */
+export async function listInquiries(): Promise<InquiryRow[]> {
+  const supabase = await createClient();
+  if (!(await leadKindAvailable(supabase))) return [];
+  const { data } = await supabase
+    .from("leads")
+    .select("*, contacts(*), interactions(kind, detail, created_at)")
+    .eq("kind", "inquiry")
+    .order("created_at", { ascending: false });
+  type Row = Lead & {
+    contacts: Contact[];
+    interactions: Array<{ kind: string; detail: string | null; created_at: string }>;
+  };
+  return ((data as unknown as Row[] | null) ?? []).map((l) => {
+    const contact = [...(l.contacts ?? [])].sort((a, b) =>
+      a.created_at.localeCompare(b.created_at),
+    )[0];
+    const note = [...(l.interactions ?? [])]
+      .filter((i) => i.kind === "note" && /^Website .* inquiry\./.test(i.detail ?? ""))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
+    const message = note?.detail?.match(/Message: ([\s\S]*)$/)?.[1]?.trim() ?? null;
+    return {
+      id: l.id,
+      name: l.name,
+      status: l.status,
+      inquiry_type: l.inquiry_type ?? null,
+      created_at: l.created_at,
+      contactName: contact?.name ?? null,
+      email: contact?.email ?? null,
+      phone: contact?.phone ?? null,
+      message: message ?? l.fit_rationale ?? null,
+    };
+  });
+}
+
+/** Inquiry leads still at status 'new' (nav badge). 0 before migration 0036. */
+export async function countNewInquiries(): Promise<number> {
+  const supabase = await createClient();
+  if (!(await leadKindAvailable(supabase))) return 0;
+  const { count } = await supabase
+    .from("leads")
+    .select("id", { count: "exact", head: true })
+    .eq("kind", "inquiry")
+    .eq("status", "new");
+  return count ?? 0;
 }

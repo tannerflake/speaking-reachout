@@ -1,5 +1,6 @@
 "use server";
 
+import { INQUIRY_REFUSAL, isInquiryLead } from "@/lib/leads/kind";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveRules, getActiveVoiceInjection, getLead } from "@/lib/data";
@@ -122,6 +123,7 @@ export async function regenerateDraft(
 
   const lead = await getLead(row.lead_id);
   if (!lead) return { error: "Lead not found." };
+  if (isInquiryLead(lead)) return { error: INQUIRY_REFUSAL };
   const [rules, voiceInjection] = await Promise.all([
     getActiveRules(),
     getActiveVoiceInjection(),

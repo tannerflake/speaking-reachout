@@ -13,7 +13,9 @@ import {
 } from "@/app/actions/attribution";
 import { OriginBadge } from "@/components/Badge";
 import { originValueLabel, type EffectiveOrigin } from "@/lib/attribution";
-import type { AttributionOverride } from "@/lib/types";
+import type { AttributionOverride, InquiryType, LeadKind } from "@/lib/types";
+import { setLeadKind } from "@/app/actions/leads";
+import { INQUIRY_BADGE, INQUIRY_TYPES } from "@/lib/leads/kind";
 import { formatDateTime, statusLabel } from "@/lib/utils";
 
 const inputClass =
@@ -394,6 +396,141 @@ function AttributionSection({
   );
 }
 
+// ---- Lead kind ---------------------------------------------------------------
+
+function KindSection({
+  leadId,
+  kind,
+  inquiryType,
+}: {
+  leadId: string;
+  /** undefined = migration 0036 not applied yet. */
+  kind: LeadKind | undefined;
+  inquiryType: InquiryType | null;
+}) {
+  const current = kind ?? "speaking";
+  const [nextKind, setNextKind] = useState<LeadKind>(current);
+  const [nextType, setNextType] = useState<InquiryType>(inquiryType ?? "press");
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  const router = useRouter();
+
+  const changed =
+    nextKind !== current || (nextKind === "inquiry" && nextType !== (inquiryType ?? null));
+  const target = nextKind === "inquiry" ? INQUIRY_BADGE[nextType] : "Speaking lead";
+
+  function save() {
+    setError(null);
+    start(async () => {
+      const res = await setLeadKind(leadId, nextKind, nextKind === "inquiry" ? nextType : null);
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      setConfirming(false);
+      router.refresh();
+    });
+  }
+
+  return (
+    <section aria-labelledby="kind-heading" className="space-y-3">
+      <h3 id="kind-heading" className="text-sm font-semibold text-zinc-800">
+        Lead kind
+      </h3>
+      <p className="text-xs text-zinc-500">
+        A non-booking inquiry (press, interview/student, other) is kept out of
+        outreach drafting, contact finding, follow-ups, the send queue and
+        pipeline stats. Switching to inquiry stops this lead&apos;s follow-ups and
+        returns scheduled emails to draft.
+      </p>
+      {kind === undefined && (
+        <p className="text-xs text-amber-700">
+          Needs database migration 0036 before a lead&apos;s kind can change.
+        </p>
+      )}
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label htmlFor="kind-select" className={labelClass}>
+            Kind
+          </label>
+          <select
+            id="kind-select"
+            value={nextKind}
+            onChange={(e) => {
+              setNextKind(e.target.value as LeadKind);
+              setConfirming(false);
+            }}
+            className={inputClass}
+          >
+            <option value="speaking">Speaking lead</option>
+            <option value="inquiry">Non-booking inquiry</option>
+          </select>
+        </div>
+        {nextKind === "inquiry" && (
+          <div>
+            <label htmlFor="inquiry-type-select" className={labelClass}>
+              Inquiry type
+            </label>
+            <select
+              id="inquiry-type-select"
+              value={nextType}
+              onChange={(e) => {
+                setNextType(e.target.value as InquiryType);
+                setConfirming(false);
+              }}
+              className={inputClass}
+            >
+              {INQUIRY_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {INQUIRY_BADGE[t]}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => setConfirming(true)}
+          disabled={pending || !changed || kind === undefined}
+          className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+        >
+          Change kind
+        </button>
+      </div>
+      {confirming && changed && (
+        <div
+          role="alertdialog"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        >
+          <span>
+            Change this lead to <strong>{target}</strong>? This is logged in the
+            activity feed.
+          </span>
+          <span className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              className="rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={save}
+              disabled={pending}
+              className="rounded-md bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-60"
+            >
+              {pending ? "Saving…" : "Confirm change"}
+            </button>
+          </span>
+        </div>
+      )}
+      {error && <p className="text-xs text-rose-600">{error}</p>}
+    </section>
+  );
+}
+
 // ---- Panel ---------------------------------------------------------------------
 
 export function LeadAdvancedPanel({
@@ -402,9 +539,14 @@ export function LeadAdvancedPanel({
   origin,
   merged,
   history,
+  kind,
+  inquiryType = null,
 }: {
   leadId: string;
   leadName: string;
+  /** leads.kind; undefined before migration 0036. */
+  kind?: LeadKind;
+  inquiryType?: InquiryType | null;
   origin: EffectiveOrigin;
   /** Already merged into another lead: merge/override are not offered. */
   merged: boolean;
@@ -412,6 +554,7 @@ export function LeadAdvancedPanel({
 }) {
   return (
     <div className="space-y-6">
+      {!merged && <KindSection leadId={leadId} kind={kind} inquiryType={inquiryType} />}
       {!merged && <MergeSection leadId={leadId} leadName={leadName} />}
       {!merged && <AttributionSection leadId={leadId} origin={origin} />}
       <section aria-labelledby="attr-history-heading">

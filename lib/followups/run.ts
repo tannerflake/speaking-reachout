@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
+import { inquiryLeadIds, isInquiryLead } from "@/lib/leads/kind";
 import { generateFollowup } from "@/lib/claude/followup";
 import { GmailNotConnectedError, sendGmail } from "@/lib/gmail/send";
 import { getThreadState } from "@/lib/gmail/thread";
@@ -102,6 +103,7 @@ export async function startSequence(
   outreach: Pick<Outreach, "id" | "lead_id" | "contact_id" | "sent_at">,
   opts: { email?: string | null } = {},
 ): Promise<number | null> {
+  if ((await inquiryLeadIds(admin, [outreach.lead_id])).has(outreach.lead_id)) return null;
   const sentAt = outreach.sent_at ? new Date(outreach.sent_at) : new Date();
   const tz = await leadTz(admin, outreach.lead_id);
   const earliest = followupEarliest(sentAt, 1, tz);
@@ -245,6 +247,12 @@ async function processSequence(
   const lead = seq.lead;
   if (!root || !lead) {
     await stop(admin, seq, "Original outreach or lead no longer exists.");
+    return "stopped";
+  }
+
+  // Guard 0: non-booking inquiries are answered by hand, never nudged.
+  if (isInquiryLead(lead)) {
+    await stop(admin, seq, "Non-booking inquiry; handled by hand.");
     return "stopped";
   }
 

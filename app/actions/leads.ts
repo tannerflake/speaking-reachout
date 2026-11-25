@@ -8,7 +8,14 @@ import { pickPrimaryContact, statusLabel } from "@/lib/utils";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { stopSequencesForLead } from "@/lib/followups/stop";
 import { FOLLOWUP_ELIGIBLE_STATUSES } from "@/lib/followups/cadence";
-import type { LeadStatus } from "@/lib/types";
+import type { InquiryType, LeadKind, LeadStatus } from "@/lib/types";
+import {
+  INQUIRY_BADGE,
+  INQUIRY_REFUSAL,
+  isInquiryLead,
+  isInquiryType,
+} from "@/lib/leads/kind";
+import { getCurrentUser } from "@/lib/auth/profile";
 
 async function logInteraction(
   leadId: string,
@@ -214,6 +221,7 @@ export async function reachOutAgain(
 ): Promise<{ outreachId?: string; error?: string }> {
   const lead = await getLead(leadId);
   if (!lead) return { error: "Lead not found." };
+  if (isInquiryLead(lead)) return { error: INQUIRY_REFUSAL };
 
   const [rules, voiceInjection] = await Promise.all([
     getActiveRules(),
@@ -262,4 +270,75 @@ export async function reachOutAgain(
       error: e instanceof Error ? e.message : "Failed to draft outreach.",
     };
   }
+}
+
+/**
+ * Reclassify a lead as a speaking prospect or a non-booking inquiry (Advanced
+ * panel, behind a confirm step). Moving to 'inquiry' stops its follow-ups,
+ * returns scheduled emails to draft and takes it off the enrichment queue, so
+ * nothing automatic touches it again. Logged in the activity feed.
+ */
+export async function setLeadKind(
+  leadId: string,
+  kind: LeadKind,
+  inquiryType: InquiryType | null,
+): Promise<{ error?: string }> {
+  if (kind !== "speaking" && kind !== "inquiry") return { error: "Unknown lead kind." };
+  if (kind === "inquiry" && !isInquiryType(inquiryType)) {
+    return { error: "Pick an inquiry type." };
+  }
+  const supabase = await createClient();
+  const { data: before } = await supabase
+    .from("leads")
+    .select("*")
+    .eq("id", leadId)
+    .maybeSingle();
+  if (!before) return { error: "Lead not found." };
+  const prev = before as { kind?: LeadKind; inquiry_type?: InquiryType | null };
+  if (prev.kind === undefined) {
+    return {
+      error:
+        "Lead kinds need database migration 0036 to be applied first.",
+    };
+  }
+  const nextType = kind === "inquiry" ? inquiryType : null;
+  if (prev.kind === kind && (prev.inquiry_type ?? null) === nextType) return {};
+
+  const { error } = await supabase
+    .from("leads")
+    .update({ kind, inquiry_type: nextType })
+    .eq("id", leadId);
+  if (error) return { error: error.message };
+
+  if (kind === "inquiry") {
+    const admin = createAdminClient();
+    await stopSequencesForLead(admin, leadId, "Reclassified as a non-booking inquiry.");
+    await admin
+      .from("outreach")
+      .update({ status: "draft", scheduled_for: null })
+      .eq("lead_id", leadId)
+      .eq("status", "queued");
+    // Off the contact-finding queue (errors harmlessly before migration 0030).
+    await admin
+      .from("leads")
+      .update({ enrich_status: null })
+      .eq("id", leadId)
+      .in("enrich_status", ["pending"]);
+  }
+
+  const describe = (k: LeadKind | undefined, t: InquiryType | null | undefined) =>
+    k === "inquiry" ? (isInquiryType(t) ? INQUIRY_BADGE[t] : "Inquiry") : "Speaking lead";
+  const me = await getCurrentUser();
+  await logInteraction(
+    leadId,
+    "status_change",
+    `Lead kind changed from ${describe(prev.kind, prev.inquiry_type)} to ${describe(kind, nextType)} by ${me?.email ?? "unknown user"}.${
+      kind === "inquiry" ? " Outreach, contact finding and follow-ups are off for this lead." : ""
+    }`,
+  );
+  revalidatePath(`/admin/leads/${leadId}`);
+  revalidatePath("/admin/leads");
+  revalidatePath("/admin/inquiries");
+  revalidatePath("/admin");
+  return {};
 }
