@@ -18,6 +18,7 @@ import { ScanEmailButton } from "@/components/ScanEmailButton";
 import { RunFollowupsButton } from "@/components/RunFollowupsButton";
 import { HunterWarning } from "@/components/HunterWarning";
 import { getHunterStatus } from "@/lib/contacts/hunterStatus";
+import { LeadHolidayOooBadge } from "@/components/Badge";
 
 export const dynamic = "force-dynamic";
 
@@ -105,6 +106,7 @@ export default async function DashboardPage() {
                       >
                         {statusLabel(l.status)}
                       </span>
+                      <LeadHolidayOooBadge until={l.holidayOooUntil} />
                     </div>
                     <span
                       className={`shrink-0 text-xs ${

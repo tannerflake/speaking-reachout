@@ -155,6 +155,13 @@ export interface Contact {
   referred_by_contact_id?: string | null;
   /** Optional phone number (migration 0034). */
   phone?: string | null;
+  /**
+   * Holiday out-of-office (migration 0035): nothing is sent to this contact
+   * before this date (YYYY-MM-DD, inclusive resume date).
+   */
+  ooo_until?: string | null;
+  /** Why, e.g. "Holiday OOO: back Jan 2, 2027" (migration 0035). */
+  ooo_reason?: string | null;
   created_at: string;
 }
 

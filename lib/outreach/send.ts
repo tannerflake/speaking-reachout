@@ -14,7 +14,9 @@ import {
   verifyContactIfPossible,
 } from "@/lib/contacts/deliverability";
 import { attachOnePager, plainEmailProblem } from "@/lib/outreach/plainEmail";
-import { sendNowVerdict } from "@/lib/outreach/schedule";
+import { dayKey, sendNowVerdict } from "@/lib/outreach/schedule";
+import { contactIsOut, prettyDate, resumeEarliestMs } from "@/lib/followups/holiday";
+import { slotAfterHoliday } from "@/lib/followups/holidayApply";
 import {
   acquireSendLock,
   loadSendLedger,
@@ -57,6 +59,8 @@ export interface SendRowResult {
   deferred?: boolean;
   /** The address needs verification first; the draft was kept, not sent. */
   held?: boolean;
+  /** The contact is out for the holidays; re-queued for their resume date. */
+  postponed?: boolean;
 }
 
 /**
@@ -108,6 +112,33 @@ export async function sendOutreachRow(
         "No valid contact email on this outreach. Resolve the contact's email before sending.",
       leadId: row.lead_id,
     };
+  }
+
+  // HOLIDAY OUT-OF-OFFICE. Nothing goes to a contact before their
+  // ooo_until date (recipient's local calendar). Re-queue for the first slot
+  // on that date; every check below runs again then.
+  if (row.contact?.ooo_until) {
+    const { data: loc } = await db
+      .from("leads")
+      .select("location_region, location_country")
+      .eq("id", row.lead_id)
+      .maybeSingle();
+    const tz = tzOfLead(loc as { location_region: string | null; location_country: string | null } | null);
+    if (contactIsOut(row.contact, dayKey(Date.now(), tz))) {
+      const at = await slotAfterHoliday(
+        db,
+        { kind: "outreach", id: row.id, leadId: row.lead_id, email, tz },
+        row.contact.ooo_until,
+      );
+      const message = `Not sent yet: ${email} is out for the holidays until ${prettyDate(
+        row.contact.ooo_until,
+      )}. Rescheduled for ${new Date(at).toUTCString()}.`;
+      await db
+        .from("outreach")
+        .update({ status: "queued", scheduled_for: new Date(at).toISOString(), error: null })
+        .eq("id", outreachId);
+      return { error: message, leadId: row.lead_id, postponed: true };
+    }
   }
 
   // BOUNCE PROTECTION. Only verified addresses are emailed; a guessed one is
@@ -512,6 +543,11 @@ export async function queueOutreach(
   let first = Infinity;
   let last = 0;
   for (const r of ordered) {
+    // A contact out for the holidays waits until their resume date.
+    const tz = tzOfLead(r.lead);
+    const start = contactIsOut(r.contact, dayKey(Date.now(), tz))
+      ? Math.max(earliest, resumeEarliestMs(r.contact?.ooo_until as string, tz))
+      : earliest;
     const at = takeSlot(
       ledger,
       {
@@ -519,9 +555,9 @@ export async function queueOutreach(
         id: r.id,
         leadId: r.lead_id,
         email: r.contact?.email ?? null,
-        tz: tzOfLead(r.lead),
+        tz,
       },
-      earliest,
+      start,
     );
     first = Math.min(first, at);
     last = Math.max(last, at);
@@ -687,6 +723,8 @@ export async function runSendTick(db: Db, opts: { maxSends?: number } = {}): Pro
         } else if (res.held) {
           out.held += 1;
           if (res.error) out.errors.push(res.error);
+        } else if (res.postponed) {
+          out.rescheduled += 1;
         } else if (res.deferred) {
           // Keep it queued, not due again for ten minutes, so a mailbox hiccup
           // doesn't spin on the same row.

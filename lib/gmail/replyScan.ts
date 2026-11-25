@@ -10,6 +10,13 @@ import { classifyBounce } from "@/lib/gmail/bounce";
 import { markAddressBounced } from "@/lib/contacts/deliverability";
 import { orgDomainOfEmail, statusLabel } from "@/lib/utils";
 import { localDatePlus } from "@/lib/attribution";
+import {
+  detectHolidayOoo,
+  holidayResumeDate,
+  inHolidayWindow,
+  mightBeHolidayOoo,
+} from "@/lib/followups/holiday";
+import { applyHolidayOoo } from "@/lib/followups/holidayApply";
 import type { IngestedMessage, LeadStatus } from "@/lib/types";
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -18,6 +25,7 @@ export interface ScanSummary {
   scanned?: number; // new inbound messages examined this run
   replies?: number; // genuine human replies matched to sent outreach
   autoReplies?: number; // out-of-office etc.; these do NOT stop follow-ups
+  holidayOoo?: number; // holiday out-of-office: that contact's nudges delayed
   bounces?: number; // delivery failures matched to sent outreach
   leadsUpdated?: number; // leads whose status changed
   nothingNew?: boolean;
@@ -124,6 +132,9 @@ async function applyRevisitForReply(
   );
   return true;
 }
+
+// Mailer daemons and no-reply senders: never worth a model call.
+const AUTOMATED_SENDER = /(no-?reply|do-?not-?reply|mailer-daemon|postmaster|bounce)/i;
 
 function senderAddress(from: string): string {
   const m = from.match(/<([^>]+)>/);
@@ -234,6 +245,7 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
 
     let replies = 0;
     let autoReplies = 0;
+    let holidayOoo = 0;
     let bounces = 0;
     const updatedLeads = new Set<string>();
     const note = (leadId: string, detail: string) =>
@@ -287,24 +299,75 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
       let summary: string;
       let revisitOn: string | null = null;
       let revisitReason: string | null = null;
+      let oooHoliday = false;
+      let oooReturnDate: string | null = null;
+      const classifyInput = {
+        leadName: hit.leads.map((l) => l.name).join(" / "),
+        from: m.from,
+        subject: m.subject,
+        body: m.body,
+        inOriginalThread: hit.kind === "thread",
+      };
       if (isAutomatedMessage(m.from, m.subject)) {
         classification = "auto_reply";
         summary = m.subject || "Automatic reply.";
       } else {
-        ({ classification, note: summary, revisitOn, revisitReason } = await classifyReply({
-          leadName: hit.leads.map((l) => l.name).join(" / "),
-          from: m.from,
-          subject: m.subject,
-          body: m.body,
-          inOriginalThread: hit.kind === "thread",
-        }));
+        ({ classification, note: summary, revisitOn, revisitReason, oooHoliday, oooReturnDate } =
+          await classifyReply(classifyInput));
       }
 
       if (classification === "unrelated") continue;
 
       if (classification === "auto_reply") {
-        // Not a response. Follow-ups continue as scheduled.
+        // Not a response: lead status never changes on an auto-reply.
         autoReplies += 1;
+
+        // Holiday out-of-office? Regex first; the model only when the regex
+        // can't tell and the text hints at holiday timing (header-detected
+        // OOOs skip the model above, so ask it here for the dates only).
+        const today = localDatePlus(0);
+        const text = `${m.subject}\n${m.body}`;
+        const det = detectHolidayOoo(text, today);
+        if (!det.returnDate && oooReturnDate) det.returnDate = oooReturnDate;
+        if (
+          !det.returnDate &&
+          !oooHoliday &&
+          isAutomatedMessage(m.from, m.subject) &&
+          !AUTOMATED_SENDER.test(m.from) &&
+          mightBeHolidayOoo(text)
+        ) {
+          const c = await classifyReply(classifyInput);
+          if (c.classification === "auto_reply") {
+            oooHoliday = c.oooHoliday;
+            det.returnDate = c.oooReturnDate;
+          }
+        }
+        det.holiday =
+          det.holiday || oooHoliday || Boolean(det.returnDate && inHolidayWindow(det.returnDate));
+
+        if (det.holiday) {
+          const resume = holidayResumeDate(det, today);
+          if (resume > today) {
+            const res = await applyHolidayOoo(admin, {
+              leadIds: hit.leads.map((l) => l.id),
+              outreachId: hit.outreachId,
+              senderEmail: senderAddress(m.from),
+              fromName,
+              returnDate: det.returnDate,
+              resume,
+            });
+            if (res.applied) {
+              if (!res.duplicate) holidayOoo += 1;
+              if (res.leadId) {
+                updatedLeads.add(res.leadId);
+                revalidatePath(`/admin/leads/${res.leadId}`);
+              }
+              continue;
+            }
+          }
+        }
+
+        // Ordinary auto-reply. Follow-ups continue as scheduled.
         for (const l of hit.leads) {
           await note(l.id, `Auto-reply from ${fromName}: ${summary} (follow-ups continue).`);
         }
@@ -403,6 +466,7 @@ export async function scanInboxForReplies(admin: Admin): Promise<ScanSummary> {
       scanned: inbound.length,
       replies,
       autoReplies,
+      holidayOoo,
       bounces,
       leadsUpdated: updatedLeads.size,
     };

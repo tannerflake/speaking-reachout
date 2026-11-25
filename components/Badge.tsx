@@ -11,7 +11,8 @@ import type {
   LeadStatus,
   OutreachStatus,
 } from "@/lib/types";
-import { originValueLabel, type OriginValue } from "@/lib/attribution";
+import { localDatePlus, originValueLabel, type OriginValue } from "@/lib/attribution";
+import { prettyDate } from "@/lib/followups/holiday";
 
 function Pill({
   children,
@@ -113,6 +114,43 @@ export function RevisitBadge({ on, note }: { on: string | null | undefined; note
     >
       Revisit {label}
       {overdue ? " (due)" : ""}
+    </Pill>
+  );
+}
+
+const HOLIDAY_PILL = "border-amber-200 bg-amber-50 text-amber-800";
+
+/**
+ * A contact whose holiday out-of-office paused their follow-ups. Shown while
+ * ooo_until >= today; nothing is sent to them before that date.
+ */
+export function HolidayOooBadge({
+  until,
+  reason,
+}: {
+  until: string | null | undefined;
+  reason?: string | null;
+}) {
+  if (!until || until < localDatePlus(0)) return null;
+  return (
+    <Pill
+      className={HOLIDAY_PILL}
+      title={`${reason ?? "Holiday out-of-office"}. No follow-ups to this contact before ${prettyDate(until)}.`}
+    >
+      Out for holidays (until {prettyDate(until)})
+    </Pill>
+  );
+}
+
+/** On a lead in the list: at least one contact is out for the holidays. */
+export function LeadHolidayOooBadge({ until }: { until: string | null | undefined }) {
+  if (!until) return null;
+  return (
+    <Pill
+      className={HOLIDAY_PILL}
+      title={`A contact here sent a holiday out-of-office; their follow-ups wait until ${prettyDate(until)}.`}
+    >
+      Out for holidays
     </Pill>
   );
 }

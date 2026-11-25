@@ -2,6 +2,7 @@ import { SPEAKER_PROFILE, generateText } from "@/lib/claude/client";
 import { extractJson } from "@/lib/claude/json";
 import { copyStyleInstructions, enforceStyle } from "@/lib/claude/style";
 import { greetingFor } from "@/lib/outreach/orgName";
+import { HOLIDAY_OPENER } from "@/lib/followups/holiday";
 import type { Contact, Lead, TailoringRule } from "@/lib/types";
 
 /**
@@ -44,8 +45,13 @@ export async function generateFollowup(params: {
   priorFollowups: string[];
   rules: TailoringRule[];
   voiceInjection?: string | null;
+  /**
+   * The recipient sent a holiday out-of-office and this is the first nudge
+   * since they got back: open with HOLIDAY_OPENER, then the normal short body.
+   */
+  holidayOpener?: boolean;
 }): Promise<GeneratedFollowup> {
-  const { lead, contact, step, original, priorFollowups, rules, voiceInjection } =
+  const { lead, contact, step, original, priorFollowups, rules, voiceInjection, holidayOpener } =
     params;
 
   const voiceBlock = voiceInjection
@@ -61,7 +67,10 @@ export async function generateFollowup(params: {
         .join("\n")}`
     : "";
 
-  const userPrompt = `Write follow-up number ${step} for this thread.
+  const opener = holidayOpener
+    ? `\n\nThe recipient's auto-reply said they were out for the holidays, and they are now back. Right after the greeting line, the body MUST open with exactly this sentence: "${HOLIDAY_OPENER}" Then continue with the normal short follow-up below (this overrides the rule about varying the opener). Do not mention the auto-reply in any other way.`
+    : "";
+  const userPrompt = `Write follow-up number ${step} for this thread.${opener}
 
 ${brief}
 
@@ -93,5 +102,22 @@ Return the JSON { body }.`;
   }
 
   const styled = enforceStyle(body, rules);
-  return { body: styled.text, styleAdjusted: styled.changed };
+  const finalBody = holidayOpener ? withHolidayOpener(styled.text) : styled.text;
+  return { body: finalBody, styleAdjusted: styled.changed };
+}
+
+/**
+ * Guarantee the post-holiday opener: if the model left it out, put it right
+ * after the greeting line ("Hi Maria,"), or first when there is none.
+ */
+export function withHolidayOpener(body: string): string {
+  if (body.toLowerCase().includes("out for the holidays")) return body;
+  const lines = body.split("\n");
+  const first = lines[0]?.trim() ?? "";
+  const isGreeting = /^(hi|hello|dear|hey|good\s+(morning|afternoon))\b.{0,60}[,!:]?$/i.test(first) && first.length <= 60;
+  if (isGreeting) {
+    const rest = lines.slice(1).join("\n").replace(/^\s*\n/, "");
+    return `${lines[0]}\n\n${HOLIDAY_OPENER} ${rest.trimStart()}`.trimEnd();
+  }
+  return `${HOLIDAY_OPENER} ${body.trimStart()}`;
 }

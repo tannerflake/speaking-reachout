@@ -23,6 +23,9 @@ import {
   stepOfStatus,
 } from "@/lib/followups/cadence";
 import { loadSendLedger, takeSlot, tzOfLead } from "@/lib/outreach/slots";
+import { dayKey } from "@/lib/outreach/schedule";
+import { HOLIDAY_REASON_PREFIX, contactIsOut } from "@/lib/followups/holiday";
+import { slotAfterHoliday } from "@/lib/followups/holidayApply";
 import { markAddressBounced } from "@/lib/contacts/deliverability";
 import { looksLikeDeliveryFailure } from "@/lib/gmail/bounce";
 import type {
@@ -282,6 +285,26 @@ async function processSequence(
     return "stopped";
   }
 
+  // Guard 3a: the contact is out for the holidays (contacts.ooo_until,
+  // migration 0035). Nothing goes to them before that date, in their own
+  // time zone: move the sequence to the first slot on it. Every other guard
+  // runs again then, so a reply in the meantime still stops it.
+  const tz = tzOfLead(lead);
+  const today = dayKey(Date.now(), tz);
+  if (contactIsOut(seq.contact, today)) {
+    const at = await slotAfterHoliday(
+      admin,
+      { kind: "followup", id: seq.id, leadId: lead.id, email, tz },
+      seq.contact?.ooo_until as string,
+    );
+    await admin
+      .from("followup_sequences")
+      .update({ next_due_at: new Date(at).toISOString() })
+      .eq("id", seq.id)
+      .eq("status", "active");
+    return "skipped";
+  }
+
   // Guard 3b: the ORGANIZATION must not be in a conversation anywhere: a
   // sibling lead, a colleague who replied to a different thread, or a thread
   // Jeff started by hand. Fails closed (error recorded, retried next run).
@@ -378,12 +401,26 @@ async function processSequence(
   // Earlier follow-ups in this thread, so the model doesn't repeat itself.
   const { data: priorRows } = await admin
     .from("outreach")
-    .select("body, sequence_step")
+    .select("body, sequence_step, sent_at")
     .eq("parent_outreach_id", root.id)
     .eq("status", "sent")
     .order("sequence_step", { ascending: true });
-  const priorFollowups = ((priorRows ?? []) as { body: string }[]).map(
-    (r) => r.body,
+  const prior = (priorRows ?? []) as { body: string; sent_at: string | null }[];
+  const priorFollowups = prior.map((r) => r.body);
+
+  // First nudge after a holiday out-of-office: nothing has gone to this
+  // contact since the OOO (our last email in the thread predates the day they
+  // were due back), so open by acknowledging it.
+  const lastSentAt = [root.sent_at, ...prior.map((r) => r.sent_at)]
+    .filter((v): v is string => Boolean(v))
+    .sort()
+    .at(-1);
+  const oooUntil = seq.contact?.ooo_until ?? null;
+  const holidayOpener = Boolean(
+    oooUntil &&
+      (seq.contact?.ooo_reason ?? "").startsWith(HOLIDAY_REASON_PREFIX) &&
+      lastSentAt &&
+      dayKey(new Date(lastSentAt).getTime(), tz) < oooUntil,
   );
 
   const gen = await generateFollowup({
@@ -394,6 +431,7 @@ async function processSequence(
     priorFollowups,
     rules: ctx.rules,
     voiceInjection: ctx.voiceInjection,
+    holidayOpener,
   });
 
   const subject = /^re:/i.test(root.subject) ? root.subject : `Re: ${root.subject}`;
@@ -428,7 +466,7 @@ async function processSequence(
   const done = step >= seq.max_steps;
   let nextAt: number | null = null;
   if (!done) {
-    const earliest = followupEarliest(now, step + 1, tzOfLead(lead));
+    const earliest = followupEarliest(now, step + 1, tz);
     try {
       nextAt = await planFollowupSlot(admin, seq, { earliest, email });
     } catch {
@@ -448,7 +486,9 @@ async function processSequence(
   await admin.from("interactions").insert({
     lead_id: seq.lead_id,
     kind: "followup_sent",
-    detail: `Follow-up #${step} sent to ${email} (auto, in the original thread).`,
+    detail: `Follow-up #${step} sent to ${email} (auto, in the original thread${
+      holidayOpener ? ", post-holiday nudge" : ""
+    }).`,
   });
 
   // Advance the lead status to followup_N, never backwards (a lead with two

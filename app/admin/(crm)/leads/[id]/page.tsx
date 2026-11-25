@@ -14,6 +14,7 @@ import {
   OriginBadge,
   QueuedBadge,
   ReferredBadge,
+  HolidayOooBadge,
   RevisitBadge,
   SourceBadge,
   StatusBadge,
@@ -301,6 +302,7 @@ export default async function LeadDetailPage({
                         {c.referred_by_contact_id && (
                           <ReferredBadge by={contactName(c.referred_by_contact_id)} />
                         )}
+                        <HolidayOooBadge until={c.ooo_until} reason={c.ooo_reason} />
                         <ContactStatusBadge status={c.contact_status} />
                       </div>
                     </div>

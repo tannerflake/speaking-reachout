@@ -17,6 +17,7 @@ import {
   OriginBadge,
   QueuedBadge,
   MergedBadge,
+  LeadHolidayOooBadge,
   NeedsVerificationBadge,
   RevisitBadge,
   SourceBadge,
@@ -1061,6 +1062,7 @@ export function LeadsView({
                       <WorkingBadge kind={working.get(r.id)} />
                       <QueuedBadge count={r.queuedCount} nextAt={r.nextScheduledAt} />
                       <NeedsVerificationBadge count={r.needsVerificationCount} />
+                      <LeadHolidayOooBadge until={r.holidayOooUntil} />
                       <SourceBadge source={r.source} />
                       <RevisitBadge
                         on={

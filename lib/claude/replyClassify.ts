@@ -1,6 +1,11 @@
 import { getAnthropic, extractText, cachedSystem } from "@/lib/claude/client";
 import { extractJson } from "@/lib/claude/json";
 import { addUsage, emptyUsage, recordUsage } from "@/lib/claude/usage";
+import {
+  inHolidayWindow,
+  isUnmistakableAutoresponder,
+  looksLikeOutOfOffice,
+} from "@/lib/followups/holiday";
 
 // Cheap model for a short, high-volume-but-rare classification. Replies to cold
 // outreach are infrequent, so this only fires a handful of times per scan and
@@ -31,6 +36,14 @@ export interface ClassifiedReply {
    * reach out spring 2027 for 2028". Null otherwise.
    */
   revisitReason: string | null;
+  /**
+   * auto_reply only: the out-of-office is about the holidays (Thanksgiving,
+   * Christmas, New Year, "the holidays") or states a return between Dec 20
+   * and Jan 12. False for any other classification.
+   */
+  oooHoliday: boolean;
+  /** auto_reply only: the stated return date (YYYY-MM-DD), else null. */
+  oooReturnDate: string | null;
 }
 
 const SYSTEM = `You classify a single email reply received in response to a cold speaking-engagement outreach sent on behalf of speaker Jeff Flake (former U.S. Senator). Decide the sender's intent and write a one-line note.
@@ -58,10 +71,12 @@ Examples of "back_burner":
 
 Revisit date: for ANY classification (interested, back_burner, cant_pay, not_interested), if the reply names or implies a future timeframe for picking the conversation back up (e.g. "try us again in March", "let's talk again after the holidays", "reach out next fall about 2028"), give a best-guess date (YYYY-MM-DD) when Jeff's team should follow up, using today's date (given in the message) to resolve relative phrases. Pick a date shortly BEFORE the timeframe so there is time to plan: "next fall" -> August 15 of the coming fall; "the spring" -> February 15 of the coming spring; "after budget season in March" -> April 1; "next year" -> January 15 of next year; "in a few months" -> about 3 months from today. Always return a future date. If the reply states no future timing (including a plain decline, or an interested reply that just wants to proceed now), or the classification is auto_reply or unrelated, use null. Do not invent timing that is not in the reply.
 
+Out-of-office: an out-of-office or vacation autoresponder is ALWAYS "auto_reply", never "interested" or "back_burner", even when it names dates, alternate contacts, or says the person will reply later. For an auto_reply, also set "ooo_holiday": true when it is about the holidays (mentions Thanksgiving, Christmas, New Year, "the holidays", "holiday break", "office closed for the holidays") or the stated return date falls between Dec 20 and Jan 12, else false; and "ooo_return_date": the date (YYYY-MM-DD) the person says they are back, resolving relative dates with today's date, or null when none is stated. For every other classification use false and null.
+
 Revisit reason: whenever revisit_on is a date, also give "revisit_reason": a short plain-English reason for that date (max ~100 characters), e.g. "Said booked for 2027; reach out spring 2027 for 2028". Otherwise null.
 
 Return ONLY a JSON object (no prose, no markdown fences):
-{ "classification": "interested" | "back_burner" | "not_interested" | "cant_pay" | "auto_reply" | "unrelated", "note": string, "revisit_on": string | null, "revisit_reason": string | null }
+{ "classification": "interested" | "back_burner" | "not_interested" | "cant_pay" | "auto_reply" | "unrelated", "note": string, "revisit_on": string | null, "revisit_reason": string | null, "ooo_holiday": boolean, "ooo_return_date": string | null }
 
 The note must be a concise summary (max ~140 characters) of what the reply actually says.`;
 
@@ -122,10 +137,12 @@ ${body || "(empty)"}`;
       note?: unknown;
       revisit_on?: unknown;
       revisit_reason?: unknown;
+      ooo_holiday?: unknown;
+      ooo_return_date?: unknown;
     }>(
       extractText(message),
     );
-    const classification: ReplyClassification =
+    let classification: ReplyClassification =
       parsed.classification === "back_burner" ||
       parsed.classification === "not_interested" ||
       parsed.classification === "cant_pay" ||
@@ -133,6 +150,15 @@ ${body || "(empty)"}`;
       (parsed.classification === "unrelated" && input.inOriginalThread === false)
         ? parsed.classification
         : "interested";
+    // An out-of-office is never interest. If the message opens like an
+    // autoresponder, or the model flagged holiday OOO fields while picking
+    // another class, it is an auto_reply.
+    if (
+      classification !== "auto_reply" &&
+      (isUnmistakableAutoresponder(input.subject, body) || parsed.ooo_holiday === true)
+    ) {
+      classification = "auto_reply";
+    }
     const note =
       typeof parsed.note === "string" && parsed.note.trim()
         ? parsed.note.trim().slice(0, 200)
@@ -146,7 +172,12 @@ ${body || "(empty)"}`;
         ? parsed.revisit_reason.trim().slice(0, 200)
         : note
       : null;
-    return { classification, note, revisitOn, revisitReason };
+    const oooReturnDate =
+      classification === "auto_reply" ? validDate(parsed.ooo_return_date) : null;
+    const oooHoliday =
+      classification === "auto_reply" &&
+      (parsed.ooo_holiday === true || Boolean(oooReturnDate && inHolidayWindow(oooReturnDate)));
+    return { classification, note, revisitOn, revisitReason, oooHoliday, oooReturnDate };
   } catch (e) {
     void recordUsage({
       feature: "classify",
@@ -157,13 +188,36 @@ ${body || "(empty)"}`;
       error: e instanceof Error ? e.message : String(e),
     });
     const snippet = body.replace(/\s+/g, " ").trim().slice(0, 140);
+    // Fallback surfaces a possible lead, but never from an out-of-office.
+    if (looksLikeOutOfOffice(input.subject, body)) {
+      return {
+        classification: "auto_reply",
+        note: input.subject || "Automatic reply.",
+        revisitOn: null,
+        revisitReason: null,
+        oooHoliday: false,
+        oooReturnDate: null,
+      };
+    }
     return {
       classification: "interested",
       note: snippet ? `Reply: ${snippet}` : "Reply received.",
       revisitOn: null,
       revisitReason: null,
+      oooHoliday: false,
+      oooReturnDate: null,
     };
   }
+}
+
+/** Any real YYYY-MM-DD date, else null. */
+function validDate(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const v = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+  const d = new Date(`${v}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== v) return null;
+  return v;
 }
 
 /** Accept only a real YYYY-MM-DD date after today; anything else is null. */

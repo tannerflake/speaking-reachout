@@ -51,6 +51,12 @@ type Db = SupabaseClient<any, any, any>;
 
 export interface LeadListRow extends Lead {
   contactsCount: number;
+  /**
+   * Latest ooo_until (YYYY-MM-DD) among this lead's contacts that is today or
+   * later: someone here is out for the holidays. Null otherwise (or before
+   * migration 0035).
+   */
+  holidayOooUntil: string | null;
   /** True when at least one contact has a usable email address. */
   hasContactEmail: boolean;
   lastActivity: string;
@@ -144,17 +150,23 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
     return query;
   };
 
-  // referred_by_contact_id arrives with migration 0034; fall back without it.
-  const withReferrals = await build("id, email, contact_status, referred_by_contact_id");
+  // ooo_until arrives with migration 0035 and referred_by_contact_id with
+  // 0034; fall back without them.
+  const withOoo = await build("id, email, contact_status, referred_by_contact_id, ooo_until");
+  const withReferrals = withOoo.error
+    ? await build("id, email, contact_status, referred_by_contact_id")
+    : withOoo;
   const { data } = withReferrals.error
     ? await build("id, email, contact_status")
     : withReferrals;
+  const today = localDatePlus(0);
   type Row = Lead & {
     contacts: {
       id: string;
       email: string | null;
       contact_status: ContactStatus;
       referred_by_contact_id?: string | null;
+      ooo_until?: string | null;
     }[];
     interactions: { created_at: string }[];
     outreach: {
@@ -204,6 +216,12 @@ export async function listLeads(filters: LeadFilters): Promise<LeadListRow[]> {
     return {
       ...row,
       contactsCount: allContacts.length,
+      holidayOooUntil:
+        allContacts
+          .map((c) => c.ooo_until ?? null)
+          .filter((d): d is string => Boolean(d && d >= today))
+          .sort()
+          .at(-1) ?? null,
       hasContactEmail:
         emailable.size > 0 || allContacts.some((c) => looksLikeRealEmail(c.email)),
       emailableContacts: emailable.size,
@@ -362,7 +380,7 @@ export async function getDueFollowupCount(): Promise<number> {
 export type DueRevisit = Pick<
   Lead,
   "id" | "name" | "status" | "revisit_on" | "revisit_note"
-> & { overdue: boolean };
+> & { overdue: boolean; holidayOooUntil: string | null };
 
 /**
  * Leads with a revisit date up to REVISIT_LOOKAHEAD_DAYS ahead (overdue
@@ -374,16 +392,27 @@ export async function getDueRevisits(): Promise<DueRevisit[]> {
   const supabase = await createClient();
   const today = localDatePlus(0);
   const horizon = localDatePlus(REVISIT_LOOKAHEAD_DAYS);
-  const { data } = await supabase
-    .from("leads")
-    .select("*")
-    .not("revisit_on", "is", null)
-    .lte("revisit_on", horizon)
-    .not("status", "in", `(${REVISIT_TERMINAL_STATUSES.join(",")})`)
-    .order("revisit_on", { ascending: true });
-  return ((data as Lead[] | null) ?? [])
+  const build = (select: string) =>
+    supabase
+      .from("leads")
+      .select(select)
+      .not("revisit_on", "is", null)
+      .lte("revisit_on", horizon)
+      .not("status", "in", `(${REVISIT_TERMINAL_STATUSES.join(",")})`)
+      .order("revisit_on", { ascending: true });
+  // contacts.ooo_until arrives with migration 0035; fall back without it.
+  const withOoo = await build("*, contacts(ooo_until)");
+  const { data } = withOoo.error ? await build("*") : withOoo;
+  type Row = Lead & { contacts?: { ooo_until?: string | null }[] };
+  return ((data as unknown as Row[] | null) ?? [])
     .filter((l) => !l.merged_into_id)
     .map((l) => ({
+      holidayOooUntil:
+        (l.contacts ?? [])
+          .map((c) => c.ooo_until ?? null)
+          .filter((d): d is string => Boolean(d && d >= today))
+          .sort()
+          .at(-1) ?? null,
       id: l.id,
       name: l.name,
       status: l.status,
